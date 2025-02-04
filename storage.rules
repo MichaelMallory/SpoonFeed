@@ -1,0 +1,69 @@
+rules_version = '2';
+
+// Craft rules based on data in your Firestore database
+// allow write: if firestore.get(
+//    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    function isValidContentType(contentType) {
+      return contentType.matches('video/.*') 
+        || contentType.matches('image/.*');
+    }
+    
+    function isValidSize(size) {
+      let maxSize = 100 * 1024 * 1024; // 100MB
+      return size < maxSize;
+    }
+
+    // Profile images
+    match /profiles/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated()
+        && isOwner(userId)
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.size < 5 * 1024 * 1024; // 5MB
+    }
+
+    // Videos directory
+    match /videos/{userId}/{fileName} {
+      allow read: if true;
+      allow create: if isAuthenticated()
+        && isOwner(userId)
+        && isValidContentType(request.resource.contentType)
+        && isValidSize(request.resource.size);
+      allow delete: if isAuthenticated()
+        && isOwner(userId);
+    }
+
+    // Recipe videos (legacy)
+    match /recipes/{fileName} {
+      allow read: if true;
+      allow create: if isAuthenticated()
+        && isValidContentType(request.resource.contentType)
+        && isValidSize(request.resource.size)
+        && fileName.matches(request.auth.uid + '.*');
+      allow delete: if isAuthenticated()
+        && fileName.matches(request.auth.uid + '.*');
+    }
+
+    // Recipe thumbnails
+    match /thumbnails/{fileName} {
+      allow read: if true;
+      allow write: if false; // Only allow Cloud Functions to write thumbnails
+    }
+
+    // Deny access to all other files
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

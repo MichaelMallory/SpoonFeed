@@ -1,0 +1,99 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code related
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+pubspec.lock
+
+# Web related
+lib/generated_plugin_registrant.dart
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Firebase related
+google-services.json
+GoogleService-Info.plist
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.firebase/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Generated files
+*.g.dart
+*.freezed.dart
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# IDE and editor files
+*.swp
+*.swo
+*~
+
+# Platform specific
+/ios/Pods/
+/ios/.symlinks/
+/ios/Flutter/Flutter.podspec
+/macos/Flutter/Flutter.podspec
+/windows/flutter/
+.vs/
+
+# Large media files
+*.mp4
+*.mov
+*.avi
+*.flv
+*.mkv
+*.webm
+
+# Google Cloud SDK
+google-cloud-sdk/
+google-cloud-cli*.tar.gz
+.gcloud/
+
+# Build and cache files
+*.dill
+*.dill.track.dill
+.dart_tool/chrome-device/
