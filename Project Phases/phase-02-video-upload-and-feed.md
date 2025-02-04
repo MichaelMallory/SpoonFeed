@@ -66,13 +66,43 @@ This phase focuses on enabling content creators to upload their cooking videos a
 - ✅ [Frontend] Integrate and test feed interactions, ensuring smooth playback and navigation.
 
 ## Remaining Tasks
-1. ⬜ Generate and store video thumbnails
-2. ⬜ Add video compression for better performance
-3. ⬜ Implement comments functionality
+1. ✅ Generate and store video thumbnails
+   - Implemented thumbnail generation during upload
+   - Added quality control (512px width, 75% quality)
+   - Added proper storage path structure
+   - Added error handling and fallbacks
+
+2. ✅ Add video compression for better performance
+   - Implemented smart compression with target size calculation
+   - Added compression ratio monitoring (minimum 1.2x improvement)
+   - Added quality control (30fps, calculated bitrate)
+   - Added compression metrics logging
+   - Added proper error handling and fallbacks
+   - Added size-based optimization (1MB per minute target)
+
+3. ✅ Implement comments functionality
+   - Added CommentModel for structured comment data
+   - Implemented comment creation and deletion
+   - Added real-time comment count updates
+   - Added proper user attribution with display names
+
 4. ⬜ Add video sharing feature
-5. ⬜ Add video player controls (fullscreen, progress bar)
-6. ⬜ Implement video caching
-7. ⬜ Add pull-to-refresh functionality
+
+5. ⬜ Add video player controls
+   - Add progress bar
+   - Add time display
+   - Add fullscreen toggle
+   - Add quality selection
+   - Add volume slider
+
+6. ✅ Implement video caching
+   - Added 500MB LRU cache system
+   - Implemented smart cache management
+   - Added cache hit/miss logging
+   - Added automatic cache cleanup
+   - Added cache size monitoring
+
+7. ~~Add pull-to-refresh functionality~~ (Removed - not applicable for TikTok-style infinite scroll)
 
 ## Next Phase Options
 1. **Recipe Details Enhancement**
@@ -81,14 +111,21 @@ This phase focuses on enabling content creators to upload their cooking videos a
    - Add cooking time and difficulty level
 
 2. **Video Player Enhancement**
-   - Add custom video player controls
-   - Implement video thumbnails
-   - Add video compression and caching
+   - ⬜ Add custom video player controls
+   - ✅ Implement video thumbnails
+   - ✅ Add video compression and caching
+   - ⬜ Add advanced playback features (speed control, quality selection)
+   - ⬜ Add offline playback support
 
 3. **Social Features**
-   - Implement comments system
-   - Add sharing functionality
-   - Enhance user profiles
+   - ✅ Implement comments system
+   - ⬜ Add sharing functionality
+   - ✅ Enhance user profiles
+     - Added profile setup/edit screen
+     - Added user bio and chef status
+     - Added profile stats (followers, following, recipes)
+     - Added profile picture support
+     - Implemented proper display name handling
 
 ## References
 - [Project Overview](project-overview.md)
