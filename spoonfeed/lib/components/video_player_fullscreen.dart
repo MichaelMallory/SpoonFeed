@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../models/video_model.dart';
 import '../services/video_service.dart';
+import 'comments_sheet.dart';
+import 'share_sheet.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:io';
 
 class VideoPlayerFullscreen extends StatefulWidget {
   final VideoModel video;
@@ -23,6 +27,10 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   late VideoPlayerController _controller;
   bool _isInitialized = false;
   final VideoService _videoService = VideoService();
+  bool _isLiked = false;
+  int _likeCount = 0;
+  int _commentCount = 0;
+  int _shareCount = 0;
 
   @override
   bool get wantKeepAlive => widget.isActive || widget.shouldPreload;
@@ -32,6 +40,15 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     super.initState();
     print('Initializing video player for: ${widget.video.title}');
     _initializeVideo();
+    _initializeMetadata();
+  }
+
+  Future<void> _initializeMetadata() async {
+    _likeCount = widget.video.likes;
+    _commentCount = widget.video.comments;
+    _shareCount = widget.video.shares;
+    _isLiked = await _videoService.isVideoLikedByUser(widget.video.id);
+    if (mounted) setState(() {});
   }
 
   @override
@@ -53,35 +70,39 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
 
   Future<void> _initializeVideo() async {
     try {
-      _controller = VideoPlayerController.networkUrl(
-        Uri.parse(widget.video.videoUrl),
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      );
+      final videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
+      
+      _controller = kIsWeb
+          ? VideoPlayerController.networkUrl(Uri.parse(videoUrl))
+          : VideoPlayerController.file(File(videoUrl));
 
       await _controller.initialize();
-      print('Video initialized: ${_controller.value.size}');
       
+      if (widget.isActive) {
+        _controller.play();
+      } else if (widget.shouldPreload) {
+        // If preloading, just initialize but don't play
+        await _controller.setVolume(0);
+        await _controller.seekTo(Duration.zero);
+      }
+
       if (mounted) {
         setState(() {
           _isInitialized = true;
-          if (widget.isActive) {
-            _controller.play();
-          } else if (widget.shouldPreload) {
-            _controller.setVolume(0);
-            _controller.seekTo(Duration.zero);
-          }
         });
       }
-      
-      _controller.setLooping(true);
     } catch (e) {
       print('Error initializing video: $e');
+      if (mounted) {
+        setState(() {
+          _isInitialized = false;
+        });
+      }
     }
   }
 
   @override
   void dispose() {
-    print('Disposing video player');
     _controller.dispose();
     super.dispose();
   }
@@ -95,6 +116,71 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
         _controller.setVolume(1.0);
       }
     });
+  }
+
+  void _handleLike() {
+    // Optimistically update UI
+    setState(() {
+      if (_isLiked) {
+        _likeCount--;
+      } else {
+        _likeCount++;
+      }
+      _isLiked = !_isLiked;
+    });
+
+    // Update backend
+    _videoService.likeVideo(
+      widget.video.id,
+      onLikeUpdated: (isLiked, newCount) {
+        if (mounted) {
+          setState(() {
+            _isLiked = isLiked;
+            _likeCount = newCount;
+          });
+        }
+      },
+    );
+  }
+
+  void _showComments() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.8,
+        child: CommentsSheet(
+          videoId: widget.video.id,
+          initialCommentCount: _commentCount,
+          videoService: _videoService,
+          onCommentCountUpdated: (newCount) {
+            setState(() => _commentCount = newCount);
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showShareSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => ShareSheet(
+        video: widget.video,
+        videoService: _videoService,
+        onShareCountUpdated: (newCount) {
+          setState(() => _shareCount = newCount);
+        },
+      ),
+    );
   }
 
   @override
@@ -162,21 +248,22 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
             child: Column(
               children: [
                 _ActionButton(
-                  icon: Icons.favorite,
-                  label: widget.video.likes.toString(),
-                  onTap: () => _videoService.likeVideo(widget.video.id),
+                  icon: _isLiked ? Icons.favorite : Icons.favorite_border,
+                  iconColor: _isLiked ? Colors.red : Colors.white,
+                  label: _likeCount.toString(),
+                  onTap: _handleLike,
                 ),
                 const SizedBox(height: 16),
                 _ActionButton(
                   icon: Icons.comment,
-                  label: widget.video.comments.toString(),
-                  onTap: () {},
+                  label: _commentCount.toString(),
+                  onTap: _showComments,
                 ),
                 const SizedBox(height: 16),
                 _ActionButton(
                   icon: Icons.share,
-                  label: 'Share',
-                  onTap: () {},
+                  label: _shareCount.toString(),
+                  onTap: _showShareSheet,
                 ),
               ],
             ),
@@ -191,12 +278,14 @@ class _ActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final Color? iconColor;
 
   const _ActionButton({
     Key? key,
     required this.icon,
     required this.label,
     required this.onTap,
+    this.iconColor,
   }) : super(key: key);
 
   @override
@@ -213,7 +302,7 @@ class _ActionButton extends StatelessWidget {
             ),
             child: Icon(
               icon,
-              color: Colors.white,
+              color: iconColor ?? Colors.white,
               size: 28,
             ),
           ),

@@ -74,6 +74,14 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isAuthenticated();
       }
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isAuthenticated();
+        allow update, delete: if isAuthenticated() 
+          && resource.data.userId == request.auth.uid;
+      }
     }
   }
 }

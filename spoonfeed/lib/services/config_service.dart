@@ -24,6 +24,7 @@ class ConfigService {
       dotenv.env['FIREBASE_ANDROID_CLIENT_ID'] ?? '';
   static String get firebaseIosClientId => 
       dotenv.env['FIREBASE_IOS_CLIENT_ID'] ?? '';
+  static String get firebaseWebClientId => dotenv.env['FIREBASE_WEB_CLIENT_ID'] ?? '';
   static String get firebaseIosBundleId => 
       dotenv.env['FIREBASE_IOS_BUNDLE_ID'] ?? '';
 } 

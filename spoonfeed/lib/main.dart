@@ -10,6 +10,7 @@ import 'screens/auth/auth_screen.dart';
 import 'screens/profile_setup/profile_setup_screen.dart';
 import 'screens/main/main_screen.dart';
 import 'screens/upload/upload_screen.dart';
+import 'screens/profile/profile_screen.dart';
 import 'services/auth_service.dart';
 import 'services/config_service.dart';
 
@@ -61,6 +62,7 @@ class SpoonFeedApp extends StatelessWidget {
         '/onboarding': (context) => const OnboardingScreen(),
         '/auth': (context) => const AuthScreen(),
         '/profile-setup': (context) => const ProfileSetupScreen(),
+        '/profile': (context) => const ProfileScreen(),
         '/main': (context) => const MainScreen(),
         '/upload': (context) => const UploadScreen(),
       },
