@@ -37,7 +37,7 @@ class AuthService extends ChangeNotifier {
       if (user == null) throw Exception('Failed to create user');
       _logger.d('Firebase Auth user created successfully with ID: ${user.uid}');
 
-      // Create user document in Firestore
+      // Create user document in Firestore with retry mechanism
       _logger.d('Creating Firestore user document...');
       final UserModel newUser = UserModel(
         uid: user.uid,
@@ -47,8 +47,26 @@ class AuthService extends ChangeNotifier {
         updatedAt: DateTime.now(),
       );
 
-      _logger.d('Saving user document to Firestore...');
-      await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
+      // Add retry mechanism for Firestore document creation
+      int retryCount = 0;
+      const maxRetries = 3;
+      const retryDelay = Duration(milliseconds: 500);
+
+      while (retryCount < maxRetries) {
+        try {
+          await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
+          _logger.i('User document created successfully in Firestore');
+          break;
+        } catch (e) {
+          retryCount++;
+          _logger.w('Attempt $retryCount failed to create Firestore document: $e');
+          if (retryCount == maxRetries) {
+            _logger.e('Failed to create Firestore document after $maxRetries attempts');
+            rethrow;
+          }
+          await Future.delayed(retryDelay);
+        }
+      }
       
       _logger.i('User created successfully: ${user.uid}');
       return newUser;

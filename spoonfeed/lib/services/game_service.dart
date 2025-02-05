@@ -13,6 +13,7 @@ class GameService extends ChangeNotifier {
   bool _isGameModeActive = false;
   int _currentScore = 0;
   int _highScore = 0;
+  int _lives = 3;
 
   bool get isGameModeActive {
     print('[GameService] Game mode active: $_isGameModeActive');
@@ -20,6 +21,21 @@ class GameService extends ChangeNotifier {
   }
   int get currentScore => _currentScore;
   int get highScore => _highScore;
+  int get lives => _lives;
+
+  // Reset lives
+  void resetLives() {
+    _lives = 3;
+    notifyListeners();
+  }
+
+  // Decrease lives
+  void decreaseLives() {
+    if (_lives > 0) {
+      _lives--;
+      notifyListeners();
+    }
+  }
 
   // Get current user's game score
   Future<GameScoreModel?> getUserScore() async {
@@ -39,29 +55,23 @@ class GameService extends ChangeNotifier {
     _currentScore = score;
     if (score > _highScore) {
       _highScore = score;
+      notifyListeners(); // Notify listeners when high score changes
     }
-    notifyListeners();
 
     final user = _auth.currentUser;
     if (user == null) return;
 
-    final currentScore = await getUserScore();
-    
-    if (currentScore == null) {
-      // First time playing
-      await _scores.doc(user.uid).set(GameScoreModel(
-        userId: user.uid,
-        highScore: score,
-        lastPlayed: DateTime.now(),
-        gamesPlayed: 1,
-      ).toMap());
-    } else {
-      // Update existing score
-      await _scores.doc(user.uid).update({
-        'highScore': score > currentScore.highScore ? score : currentScore.highScore,
+    try {
+      // Update high score in Firestore
+      await _scores.doc(user.uid).set({
+        'userId': user.uid,
+        'highScore': _highScore,
         'lastPlayed': DateTime.now(),
-        'gamesPlayed': currentScore.gamesPlayed + 1,
-      });
+        'gamesPlayed': FieldValue.increment(1),
+        'lastUpdated': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('Error updating score: $e');
     }
   }
 

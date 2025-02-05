@@ -11,12 +11,14 @@ class VideoPlayerFullscreen extends StatefulWidget {
   final VideoModel video;
   final bool isActive;
   final bool shouldPreload;
+  final bool isGameMode;
 
   const VideoPlayerFullscreen({
     Key? key,
     required this.video,
     required this.isActive,
     this.shouldPreload = false,
+    this.isGameMode = false,
   }) : super(key: key);
 
   @override
@@ -57,6 +59,7 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     if (widget.isActive != oldWidget.isActive) {
       print('Video active state changed: ${widget.isActive}');
       if (widget.isActive) {
+        _controller?.setVolume(1.0);
         _controller?.play();
       } else {
         _controller?.pause();
@@ -71,6 +74,11 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   Future<void> _initializeVideo() async {
     try {
       print('[VideoPlayer] Starting initialization for video: ${widget.video.id}');
+      if (_controller != null) {
+        print('[VideoPlayer] Controller already exists, skipping initialization');
+        return;
+      }
+
       final videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
       print('[VideoPlayer] Retrieved video URL: $videoUrl');
       
@@ -78,6 +86,12 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       _controller = kIsWeb
           ? VideoPlayerController.networkUrl(Uri.parse(videoUrl))
           : VideoPlayerController.file(File(videoUrl));
+
+      // Set video quality based on network conditions
+      if (!kIsWeb) {
+        await _controller?.setPlaybackSpeed(1.0);
+        await _controller?.setVolume(0.0); // Start muted and unmute when active
+      }
 
       print('[VideoPlayer] Initializing controller');
       await _controller?.initialize();
@@ -95,10 +109,13 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       
       if (widget.isActive) {
         print('[VideoPlayer] Video is active, starting playback');
+        _controller?.setVolume(1.0);
         _controller?.play();
       } else if (widget.shouldPreload) {
         print('[VideoPlayer] Preloading video without playback');
         await _controller?.setVolume(0);
+        // Preload a small portion of the video
+        await _controller?.seekTo(const Duration(milliseconds: 500));
         await _controller?.seekTo(Duration.zero);
       }
 
@@ -207,134 +224,43 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
-    final size = MediaQuery.of(context).size;
-    print('[VideoPlayer] Building video player. Screen size: ${size.width} x ${size.height}');
-    print('[VideoPlayer] Initialized: $_isInitialized, Active: ${widget.isActive}');
+    print('[VideoPlayer] Building video player for ${widget.video.id}');
+    print('[VideoPlayer] Game mode: ${widget.isGameMode}');
     
-    if (_controller?.value.hasError ?? false) {
-      print('[VideoPlayer] Controller has error: ${_controller?.value.errorDescription}');
-    }
-
-    if (_isInitialized && _controller != null) {
-      print('[VideoPlayer] Video aspect ratio: ${_controller!.value.aspectRatio}');
-      print('[VideoPlayer] Container color: ${Colors.transparent}');
-    }
-
     return Container(
+      width: MediaQuery.of(context).size.width,
+      height: MediaQuery.of(context).size.height,
       color: Colors.black,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Video Layer
-          Positioned.fill(
-            child: _isInitialized && _controller != null
-                ? GestureDetector(
-                    onTap: _togglePlayPause,
-                    child: Container(
-                      color: Colors.black,
-                      child: Center(
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            print('[VideoPlayer] Layout constraints: ${constraints.maxWidth} x ${constraints.maxHeight}');
-                            
-                            // Calculate video dimensions to maintain aspect ratio
-                            final videoAspectRatio = _controller!.value.aspectRatio;
-                            final screenAspectRatio = constraints.maxWidth / constraints.maxHeight;
-                            
-                            double videoWidth;
-                            double videoHeight;
-                            
-                            if (videoAspectRatio < screenAspectRatio) {
-                              // Video is taller than screen
-                              videoWidth = constraints.maxWidth;
-                              videoHeight = videoWidth / videoAspectRatio;
-                            } else {
-                              // Video is wider than screen
-                              videoHeight = constraints.maxHeight;
-                              videoWidth = videoHeight * videoAspectRatio;
-                            }
-                            
-                            print('[VideoPlayer] Calculated video size: $videoWidth x $videoHeight');
-                            
-                            return Container(
-                              width: videoWidth,
-                              height: videoHeight,
-                              color: Colors.black,
-                              child: VideoPlayer(_controller!),
-                            );
-                          },
+          // Video player
+          _controller != null && _controller!.value.isInitialized
+              ? GestureDetector(
+                  onTap: _togglePlayPause,
+                  child: Container(
+                    color: Colors.black,
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      child: SizedBox(
+                        width: _controller!.value.size.width,
+                        height: _controller!.value.size.height,
+                        child: AspectRatio(
+                          aspectRatio: _controller!.value.aspectRatio,
+                          child: VideoPlayer(_controller!),
                         ),
                       ),
                     ),
-                  )
-                : Container(
-                    color: Colors.black,
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CircularProgressIndicator(color: Colors.white),
-                          SizedBox(height: 16),
-                          Text(
-                            'Initializing Video...',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
                   ),
-          ),
+                )
+              : const Center(child: CircularProgressIndicator()),
 
-          // Video info overlay at bottom
-          Positioned(
-            left: 16,
-            right: 72,
-            bottom: MediaQuery.of(context).padding.bottom + 80,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.video.title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 4.0,
-                        color: Colors.black,
-                        offset: Offset(1.0, 1.0),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  widget.video.description,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 4.0,
-                        color: Colors.black,
-                        offset: Offset(1.0, 1.0),
-                      ),
-                    ],
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-
-          // Right side action buttons
+          // Video controls overlay - Adjust position based on game mode
           Positioned(
             right: 8,
-            bottom: MediaQuery.of(context).padding.bottom + 120,
+            bottom: widget.isGameMode ? 16 : kBottomNavigationBarHeight + 16,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 _ActionButton(
                   icon: _isLiked ? Icons.favorite : Icons.favorite_border,
@@ -353,6 +279,51 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                   icon: Icons.share,
                   label: _shareCount.toString(),
                   onTap: _showShareSheet,
+                ),
+              ],
+            ),
+          ),
+
+          // Video info overlay at bottom - Adjust position based on game mode
+          Positioned(
+            left: 8,
+            right: 72,
+            bottom: widget.isGameMode ? 16 : kBottomNavigationBarHeight + 16,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.video.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    shadows: [
+                      Shadow(
+                        blurRadius: 4.0,
+                        color: Colors.black,
+                        offset: Offset(1.0, 1.0),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  widget.video.description,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    shadows: [
+                      Shadow(
+                        blurRadius: 4.0,
+                        color: Colors.black,
+                        offset: Offset(1.0, 1.0),
+                      ),
+                    ],
+                  ),
+                  maxLines: widget.isGameMode ? 1 : 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),

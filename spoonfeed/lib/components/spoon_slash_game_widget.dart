@@ -22,7 +22,11 @@ class _SpoonSlashGameWidgetState extends State<SpoonSlashGameWidget> {
   @override
   void initState() {
     super.initState();
-    game = SpoonSlashGame(onScoreChanged: widget.onScoreChanged);
+    game = SpoonSlashGame(onScoreChanged: (score) {
+      widget.onScoreChanged(score);
+      // Update the GameService with the new score
+      Provider.of<GameService>(context, listen: false).updateScore(score);
+    });
   }
 
   @override
@@ -88,70 +92,74 @@ class _SpoonSlashGameWidgetState extends State<SpoonSlashGameWidget> {
           Container(
             color: Colors.black.withOpacity(0.85),
             child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    '🔪 Game Over! 🍴',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 36,
-                      fontWeight: FontWeight.bold,
-                      shadows: [
-                        Shadow(
-                          color: Colors.red,
-                          blurRadius: 8,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      '🔪 Game Over! 🍴',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 36,
+                        fontWeight: FontWeight.bold,
+                        shadows: [
+                          Shadow(
+                            color: Colors.red,
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Score: ${game.score}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 16,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              game.startGame();
+                            });
+                          },
+                          icon: const Icon(Icons.replay, size: 28),
+                          label: const Text(
+                            'Play Again',
+                            style: TextStyle(fontSize: 20),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            backgroundColor: Colors.green,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () {
+                            final gameService = Provider.of<GameService>(context, listen: false);
+                            gameService.toggleGameMode();
+                          },
+                          icon: const Icon(Icons.close, size: 28),
+                          label: const Text(
+                            'Close Game',
+                            style: TextStyle(fontSize: 20),
+                          ),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    'Score: ${game.score}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: () {
-                          setState(() {
-                            game.startGame();
-                          });
-                        },
-                        icon: const Icon(Icons.replay, size: 28),
-                        label: const Text(
-                          'Play Again',
-                          style: TextStyle(fontSize: 20),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                          backgroundColor: Colors.green,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      TextButton.icon(
-                        onPressed: () {
-                          final gameService = Provider.of<GameService>(context, listen: false);
-                          gameService.toggleGameMode();
-                        },
-                        icon: const Icon(Icons.close, size: 28),
-                        label: const Text(
-                          'Close Game',
-                          style: TextStyle(fontSize: 20),
-                        ),
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

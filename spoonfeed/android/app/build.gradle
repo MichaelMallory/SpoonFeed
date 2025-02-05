@@ -62,7 +62,7 @@ android {
             firebaseAppDistribution {
                 artifactType="APK"
                 releaseNotes="Test build for internal testing"
-                testers="michael.mallory@reelai.com"  // Replace with your email
+                testers="michael.mallory@reelai.com"
             }
         }
     }

@@ -81,32 +81,50 @@ class _UploadScreenState extends State<UploadScreen> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw Exception('User must be logged in to upload videos');
 
-      final videoFile = File(_videoFile!.path);
-      final downloadUrl = await _videoService.uploadVideo(
-        videoFile,
-        user.uid,
-        (progress) {
-          setState(() {
-            _uploadProgress = progress;
-          });
-        },
-      );
+      String videoId;
+      if (kIsWeb) {
+        // Handle web upload
+        final bytes = await _videoFile!.readAsBytes();
+        videoId = await _videoService.uploadVideoWeb(
+          videoBytes: bytes,
+          fileName: _videoFile!.name,
+          title: _titleController.text,
+          description: _descriptionController.text,
+          onProgress: (progress) {
+            setState(() {
+              _uploadProgress = progress;
+            });
+          },
+        );
+      } else {
+        // Handle mobile/desktop upload
+        final videoFile = File(_videoFile!.path);
+        videoId = await _videoService.uploadVideo(
+          videoFile,
+          user.uid,
+          (progress) {
+            setState(() {
+              _uploadProgress = progress;
+            });
+          },
+        );
+      }
 
-      // Create video document in Firestore
-      await _firestore.collection('videos').add({
-        'userId': user.uid,
-        'title': _titleController.text,
-        'description': _descriptionController.text,
-        'videoUrl': downloadUrl,
-        'thumbnailUrl': '', // TODO: Add thumbnail generation
-        'createdAt': FieldValue.serverTimestamp(),
-        'likes': 0,
-        'comments': 0,
-        'shares': 0,
-      });
+      // Update user's video count
+      await _videoService.updateUserVideoCount(user.uid);
 
       if (mounted) {
-        Navigator.of(context).pop(true);
+        // Show success message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video uploaded successfully!')),
+        );
+
+        // Navigate back to profile with refresh flag
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/profile',
+          (route) => false,
+          arguments: {'refresh': true},
+        );
       }
     } catch (e) {
       print('Error uploading video: $e');

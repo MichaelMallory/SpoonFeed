@@ -27,10 +27,12 @@ class VideoService {
   bool _hasMoreVideos = true;
   static const int _pageSize = 10;
   static const int maxRetries = 3;
-  static const int maxCacheSize = 500 * 1024 * 1024; // 500MB cache limit
+  static const int maxCacheSize = 2000 * 1024 * 1024; // Increased to 2GB cache limit
+  static const int minCacheSizeAfterCleanup = 1000 * 1024 * 1024; // 1GB minimum after cleanup
 
   // Cache management
   final Map<String, String> _videoCache = {};
+  final Map<String, DateTime> _lastAccessTime = {};
   int _currentCacheSize = 0;
 
   Future<String> _getCachedVideoPath(String videoUrl) async {
@@ -39,10 +41,12 @@ class VideoService {
       final file = File(cachedPath);
       if (await file.exists()) {
         print('Cache hit: $videoUrl');
+        _lastAccessTime[videoUrl] = DateTime.now(); // Update last access time
         return cachedPath;
       }
       // Cache file doesn't exist, remove from cache
       _videoCache.remove(videoUrl);
+      _lastAccessTime.remove(videoUrl);
       _currentCacheSize -= await file.length();
     }
 
@@ -53,14 +57,14 @@ class VideoService {
     final filePath = '${cacheDir.path}/$fileName.mp4';
     
     // Check if we need to clear some cache
-    while (_currentCacheSize + bytes.length > maxCacheSize && _videoCache.isNotEmpty) {
-      final oldestUrl = _videoCache.keys.first;
-      await _removeCachedVideo(oldestUrl);
+    if (_currentCacheSize + bytes.length > maxCacheSize) {
+      await _cleanupCache(bytes.length);
     }
     
     // Save to cache
     await File(filePath).writeAsBytes(bytes);
     _videoCache[videoUrl] = filePath;
+    _lastAccessTime[videoUrl] = DateTime.now();
     _currentCacheSize += bytes.length;
     print('Cached video: $videoUrl');
     print('Current cache size: ${_currentCacheSize / (1024 * 1024)}MB');
@@ -68,16 +72,31 @@ class VideoService {
     return filePath;
   }
 
-  Future<void> _removeCachedVideo(String videoUrl) async {
-    final cachedPath = _videoCache.remove(videoUrl);
-    if (cachedPath != null) {
+  Future<void> _cleanupCache(int requiredSpace) async {
+    // Sort videos by last access time
+    final sortedVideos = _videoCache.keys.toList()
+      ..sort((a, b) => _lastAccessTime[a]!.compareTo(_lastAccessTime[b]!));
+    
+    int freedSpace = 0;
+    for (final videoUrl in sortedVideos) {
+      if (_currentCacheSize - freedSpace <= minCacheSizeAfterCleanup) break;
+      
+      final cachedPath = _videoCache[videoUrl]!;
       final file = File(cachedPath);
       if (await file.exists()) {
-        _currentCacheSize -= await file.length();
+        freedSpace += await file.length();
         await file.delete();
-        print('Removed from cache: $videoUrl');
       }
+      
+      _videoCache.remove(videoUrl);
+      _lastAccessTime.remove(videoUrl);
+      print('Removed from cache: $videoUrl');
+      
+      if (freedSpace >= requiredSpace) break;
     }
+    
+    _currentCacheSize -= freedSpace;
+    print('Cache cleanup complete. New size: ${_currentCacheSize / (1024 * 1024)}MB');
   }
 
   Future<void> clearCache() async {
@@ -94,7 +113,15 @@ class VideoService {
   }
 
   Future<MediaInfo?> compressVideo(String videoPath) async {
+    if (kIsWeb) {
+      print('Video compression not supported on web platform');
+      return null;
+    }
+
     try {
+      // Check if there's an ongoing compression
+      await VideoCompress.cancelCompression();
+      
       final info = await VideoCompress.compressVideo(
         videoPath,
         quality: VideoQuality.MediumQuality,
@@ -124,6 +151,13 @@ class VideoService {
 
   Future<String?> _generateThumbnail(String videoPath, {bool isWeb = false}) async {
     try {
+      if (kIsWeb) {
+        // For web, we'll use a default thumbnail for now
+        // In a production app, you might want to use a server-side solution
+        print('Web platform detected, using default thumbnail');
+        return '';
+      }
+
       final fileName = '${DateTime.now().millisecondsSinceEpoch}_thumb.jpg';
       final thumbnailBytes = await VideoThumbnail.thumbnailData(
         video: videoPath,
@@ -147,15 +181,22 @@ class VideoService {
       return await snapshot.ref.getDownloadURL();
     } catch (e) {
       print('Error generating thumbnail: $e');
-      return null;
+      return '';  // Return empty string instead of null for better error handling
     }
   }
 
   Future<String> uploadVideo(File videoFile, String userId, ProgressCallback onProgress) async {
+    if (kIsWeb) {
+      throw UnsupportedError('Direct file upload not supported on web. Use uploadVideoWeb instead.');
+    }
+
     try {
       // Compress video before uploading
       final MediaInfo? compressedInfo = await compressVideo(videoFile.path);
       final File fileToUpload = compressedInfo?.file ?? videoFile;
+      
+      // Generate thumbnail
+      final String? thumbnailUrl = await _generateThumbnail(fileToUpload.path);
       
       // Generate a unique filename
       final String filename = '${userId}_${DateTime.now().millisecondsSinceEpoch}.mp4';
@@ -178,7 +219,25 @@ class VideoService {
 
       // Get download URL
       final String downloadUrl = await ref.getDownloadURL();
-      return downloadUrl;
+
+      // Create video document in Firestore
+      final docRef = await _firestore.collection('videos').add({
+        'userId': userId,
+        'videoUrl': downloadUrl,
+        'thumbnailUrl': thumbnailUrl ?? '',
+        'createdAt': FieldValue.serverTimestamp(),
+        'likes': 0,
+        'comments': 0,
+        'shares': 0,
+        'fileName': filename,
+      });
+
+      // Update user's video count
+      await _firestore.collection('users').doc(userId).update({
+        'videoCount': FieldValue.increment(1),
+      });
+
+      return docRef.id;
     } catch (e) {
       print('Error uploading video: $e');
       rethrow;
@@ -192,36 +251,38 @@ class VideoService {
     required String description,
     ProgressCallback? onProgress,
   }) async {
+    if (!kIsWeb) {
+      throw UnsupportedError('Web upload method called on non-web platform. Use uploadVideo instead.');
+    }
+
     if (_auth.currentUser == null) {
       throw Exception('User must be logged in to upload videos');
     }
 
     try {
-      // Compress video bytes for web
-      final Uint8List? compressedBytes = await _compressVideoWeb(videoBytes);
-      final bytesToUpload = compressedBytes ?? videoBytes;
+      print('Starting web video upload. Size: ${videoBytes.length / (1024 * 1024)}MB');
       
-      // Generate a unique filename
-      final String uniqueFileName = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
       final String userId = _auth.currentUser!.uid;
+      final String uniqueFileName = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
       
-      // Create storage reference with resumable upload
+      // Create storage reference
       final Reference storageRef = _storage.ref().child('videos/$userId/$uniqueFileName');
       
-      // Upload video file with metadata and progress monitoring
+      // Upload video file with metadata
       final UploadTask uploadTask = storageRef.putData(
-        bytesToUpload,
+        videoBytes,
         SettableMetadata(
           contentType: 'video/mp4',
           customMetadata: {
             'userId': userId,
             'originalName': fileName,
-            'isCompressed': (compressedBytes != null).toString(),
+            'title': title,
+            'description': description,
           },
         ),
       );
 
-      // Monitor upload progress with error handling
+      // Monitor upload progress
       uploadTask.snapshotEvents.listen(
         (TaskSnapshot snapshot) {
           final progress = snapshot.bytesTransferred / snapshot.totalBytes;
@@ -234,42 +295,36 @@ class VideoService {
         },
       );
 
-      // Wait for upload to complete with retry logic
-      TaskSnapshot snapshot;
-      int retryCount = 0;
-      while (true) {
-        try {
-          snapshot = await uploadTask;
-          break;
-        } catch (e) {
-          if (retryCount >= maxRetries) rethrow;
-          retryCount++;
-          await Future.delayed(Duration(seconds: retryCount * 2)); // Exponential backoff
-          continue;
-        }
-      }
-
+      // Wait for upload to complete
+      final TaskSnapshot snapshot = await uploadTask;
       final String downloadUrl = await snapshot.ref.getDownloadURL();
-      
-      // Generate thumbnail from the uploaded video URL
-      final String? thumbnailUrl = await _generateThumbnail(downloadUrl, isWeb: true);
 
+      // Generate thumbnail URL (we'll update this later when possible)
+      String thumbnailUrl = '';
+      try {
+        thumbnailUrl = await _generateThumbnail(downloadUrl, isWeb: true) ?? '';
+      } catch (e) {
+        print('Error generating thumbnail: $e');
+      }
+      
       // Create video document in Firestore
       final DocumentReference videoDoc = await _firestore.collection('videos').add({
         'userId': userId,
         'title': title,
         'description': description,
         'videoUrl': downloadUrl,
-        'thumbnailUrl': thumbnailUrl ?? '',
+        'thumbnailUrl': thumbnailUrl,
         'createdAt': FieldValue.serverTimestamp(),
         'likes': 0,
         'comments': 0,
         'shares': 0,
         'fileName': uniqueFileName,
-        'fileSize': bytesToUpload.length,
-        'originalSize': videoBytes.length,
-        'isCompressed': compressedBytes != null,
-        'duration': 0, // TODO: Add video duration
+        'fileSize': videoBytes.length,
+      });
+
+      // Update user's video count
+      await _firestore.collection('users').doc(userId).update({
+        'videoCount': FieldValue.increment(1),
       });
 
       return videoDoc.id;
@@ -313,6 +368,48 @@ class VideoService {
       return snapshot.docs;
     } catch (e) {
       print('Error loading more videos: $e');
+      return [];
+    }
+  }
+
+  // Get user's videos
+  Future<List<QueryDocumentSnapshot>> getUserVideos(String userId) async {
+    try {
+      print('[VideoService] Fetching videos for user: $userId');
+      final QuerySnapshot snapshot = await _firestore
+          .collection('videos')
+          .where('userId', isEqualTo: userId)
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      print('[VideoService] Found ${snapshot.docs.length} videos for user');
+      return snapshot.docs;
+    } catch (e) {
+      print('[VideoService] Error getting user videos: $e');
+      rethrow;
+    }
+  }
+
+  // New method to get discover feed videos (random selection)
+  Future<List<QueryDocumentSnapshot>> getDiscoverFeedVideos() async {
+    try {
+      // Get a larger batch of recent videos
+      final QuerySnapshot snapshot = await _firestore
+          .collection('videos')
+          .orderBy('createdAt', descending: true)
+          .limit(50)  // Get more videos to randomize from
+          .get();
+
+      final List<QueryDocumentSnapshot> docs = snapshot.docs;
+      if (docs.isEmpty) return [];
+
+      // Shuffle the videos for randomization
+      docs.shuffle();
+
+      // Return first _pageSize videos
+      return docs.take(_pageSize).toList();
+    } catch (e) {
+      print('Error getting discover feed videos: $e');
       return [];
     }
   }
@@ -523,5 +620,37 @@ class VideoService {
     }
   }
 
+  Future<void> _removeCachedVideo(String videoUrl) async {
+    if (_videoCache.containsKey(videoUrl)) {
+      final cachedPath = _videoCache[videoUrl]!;
+      final file = File(cachedPath);
+      if (await file.exists()) {
+        _currentCacheSize -= await file.length();
+        await file.delete();
+      }
+      _videoCache.remove(videoUrl);
+      _lastAccessTime.remove(videoUrl);
+    }
+  }
+
   bool get hasMoreVideos => _hasMoreVideos;
+
+  // Update user's video count
+  Future<void> updateUserVideoCount(String userId) async {
+    try {
+      // Get the actual count of user's videos
+      final QuerySnapshot videoSnapshot = await _firestore
+          .collection('videos')
+          .where('userId', isEqualTo: userId)
+          .get();
+
+      // Update the user document with the accurate count
+      await _firestore.collection('users').doc(userId).update({
+        'videoCount': videoSnapshot.docs.length,
+      });
+    } catch (e) {
+      print('[VideoService] Error updating video count: $e');
+      rethrow;
+    }
+  }
 } 

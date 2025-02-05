@@ -71,7 +71,7 @@ class SpoonFeedApp extends StatelessWidget {
         '/onboarding': (context) => const OnboardingScreen(),
         '/auth': (context) => const AuthScreen(),
         '/profile-setup': (context) => const ProfileSetupScreen(),
-        '/profile': (context) => const ProfileScreen(),
+        '/profile': (context) => ProfileScreen(userId: FirebaseAuth.instance.currentUser?.uid ?? ''),
         '/main': (context) => const MainScreen(),
         '/upload': (context) => const UploadScreen(),
       },

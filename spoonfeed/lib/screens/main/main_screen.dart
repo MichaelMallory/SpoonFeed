@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../feed/feed_screen.dart';
+import '../discover/discover_screen.dart';
 import '../upload/upload_screen.dart';
 import '../profile/profile_screen.dart';
 
@@ -12,24 +14,19 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
-  static const TextStyle optionStyle = TextStyle(
-    fontSize: 30,
-    fontWeight: FontWeight.bold,
-  );
+  final _auth = FirebaseAuth.instance;
 
-  // Remove static list to allow proper state management for video feed
   late final List<Widget> _screens;
 
   @override
   void initState() {
     super.initState();
-    // Initialize screens here to ensure proper state management
     _screens = <Widget>[
-      const FeedScreen(), // This will use the new fullscreen implementation
-      const Center(child: Text('Discover', style: optionStyle)),
+      const FeedScreen(),
+      const DiscoverScreen(),
       const UploadScreen(),
-      const Center(child: Text('Inbox', style: optionStyle)),
-      const ProfileScreen(),
+      const Center(child: Text('Inbox')),
+      ProfileScreen(userId: _auth.currentUser?.uid ?? ''),
     ];
   }
 
@@ -49,19 +46,37 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    print('[MainScreen] Building main screen');
     return Scaffold(
-      body: _screens.elementAt(_selectedIndex),
-      bottomNavigationBar: Theme(
-        data: Theme.of(context).copyWith(
-          canvasColor: Colors.black,
+      extendBody: true, // Allow content to go behind bottom nav
+      resizeToAvoidBottomInset: false,
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _screens,
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.transparent,
+              Colors.black.withOpacity(0.5),
+              Colors.black,
+            ],
+          ),
         ),
         child: BottomNavigationBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
           type: BottomNavigationBarType.fixed,
-          backgroundColor: Colors.black,
           selectedItemColor: Colors.white,
           unselectedItemColor: Colors.grey,
           showSelectedLabels: true,
           showUnselectedLabels: true,
+          selectedFontSize: 10,
+          unselectedFontSize: 10,
+          iconSize: 24,
           items: const <BottomNavigationBarItem>[
             BottomNavigationBarItem(
               icon: Icon(Icons.home),
