@@ -19,12 +19,13 @@ class FirebaseConfig {
         
         _useEmulator = true;
         _logger.i('Firebase emulators configured successfully');
+      } else {
+        _logger.i('Using production Firebase instance');
       }
     } catch (e) {
       _logger.e('Error configuring Firebase emulators: $e');
-      rethrow;
     }
   }
 
-  static bool get useEmulator => _useEmulator;
+  static bool get isUsingEmulator => _useEmulator;
 } 

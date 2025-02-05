@@ -32,15 +32,10 @@ dependencies:
     sdk: flutter
   flutter_dotenv: ^5.1.0
   flame: ^1.8.0
-
-  # Firebase
-  firebase_core: ^2.24.2
-  firebase_auth: ^4.15.3
-  cloud_firestore: ^4.13.6
-  firebase_storage: ^11.5.6
-  firebase_analytics: ^10.8.5
-  firebase_messaging: ^14.7.15
-  firebase_crashlytics: ^3.4.14
+  firebase_core: ^2.25.4
+  firebase_auth: ^4.17.4
+  cloud_firestore: ^4.15.4
+  firebase_storage: ^11.6.5
   google_sign_in: ^6.2.1
 
   # Media

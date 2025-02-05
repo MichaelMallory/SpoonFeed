@@ -36,6 +36,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => GameService()),
+        ChangeNotifierProvider(create: (_) => AuthService()),
       ],
       child: const SpoonFeedApp(),
     ),
@@ -98,29 +99,30 @@ class _SplashScreenState extends State<SplashScreen> {
       
       if (!mounted) return;
       
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        // Check if user has completed their profile
-        final authService = AuthService();
-        final userData = await authService.getUserData(user.uid);
-        
-        if (!mounted) return;
-        
-        if (userData?.displayName == null || userData?.bio == null) {
-          logger.i('User profile incomplete, navigating to profile setup');
-          Navigator.of(context).pushReplacementNamed('/profile-setup');
-        } else {
-          logger.i('User profile complete, navigating to main');
-          Navigator.of(context).pushReplacementNamed('/main');
-        }
-      } else {
-        // Navigate to onboarding if user is not logged in
-        logger.i('User is not logged in, navigating to onboarding');
-        Navigator.of(context).pushReplacementNamed('/onboarding');
-      }
+      // Temporarily skip Firebase auth check and go straight to onboarding
+      Navigator.of(context).pushReplacementNamed('/onboarding');
+      
+      // Commented out Firebase auth check
+      // final user = FirebaseAuth.instance.currentUser;
+      // if (user != null) {
+      //   final authService = AuthService();
+      //   final userData = await authService.getUserData(user.uid);
+      //   
+      //   if (!mounted) return;
+      //   
+      //   if (userData?.displayName == null || userData?.bio == null) {
+      //     logger.i('User profile incomplete, navigating to profile setup');
+      //     Navigator.of(context).pushReplacementNamed('/profile-setup');
+      //   } else {
+      //     logger.i('User profile complete, navigating to main');
+      //     Navigator.of(context).pushReplacementNamed('/main');
+      //   }
+      // } else {
+      //   logger.i('User is not logged in, navigating to onboarding');
+      //   Navigator.of(context).pushReplacementNamed('/onboarding');
+      // }
     } catch (e) {
       logger.e('Error checking auth state: $e');
-      // On error, default to onboarding
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/onboarding');
       }
