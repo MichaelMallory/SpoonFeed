@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import '../models/comment_model.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 typedef ProgressCallback = void Function(double progress);
 typedef LikeCallback = void Function(bool isLiked, int newCount);
@@ -92,45 +93,15 @@ class VideoService {
     return await _getCachedVideoPath(videoUrl);
   }
 
-  Future<File?> _compressVideo(File videoFile) async {
+  Future<MediaInfo?> compressVideo(String videoPath) async {
     try {
-      // Get original video info
-      final MediaInfo? originalInfo = await VideoCompress.getMediaInfo(videoFile.path);
-      if (originalInfo == null) return null;
-      
-      print('Original video size: ${(originalInfo.filesize ?? 0) / (1024 * 1024)}MB');
-      print('Original video duration: ${originalInfo.duration}s');
-      
-      // Calculate target bitrate based on video duration
-      // Aim for ~1MB per minute of video, with a minimum of 2MB
-      final double durationInMinutes = (originalInfo.duration ?? 0) / 60;
-      final int targetSize = max(2, (durationInMinutes * 1).round()) * 1024 * 1024; // in bytes
-      final int targetBitrate = (targetSize * 8) ~/ (originalInfo.duration ?? 1); // in bits per second
-
-      // Compress video with calculated bitrate
-      final MediaInfo? mediaInfo = await VideoCompress.compressVideo(
-        videoFile.path,
+      final info = await VideoCompress.compressVideo(
+        videoPath,
         quality: VideoQuality.MediumQuality,
         deleteOrigin: false,
         includeAudio: true,
-        frameRate: 30,
-        bitrate: targetBitrate,
       );
-      
-      if (mediaInfo?.file == null) return null;
-
-      // Log compression results
-      final double compressionRatio = (originalInfo.filesize ?? 1) / (mediaInfo?.filesize ?? 1);
-      print('Compressed video size: ${(mediaInfo?.filesize ?? 0) / (1024 * 1024)}MB');
-      print('Compression ratio: ${compressionRatio.toStringAsFixed(2)}x');
-      
-      // If compression didn't help much, return original
-      if (compressionRatio < 1.2) {
-        print('Compression not effective enough, using original file');
-        return null;
-      }
-
-      return mediaInfo?.file;
+      return info;
     } catch (e) {
       print('Error compressing video: $e');
       return null;
@@ -180,100 +151,37 @@ class VideoService {
     }
   }
 
-  Future<String> uploadVideo({
-    required File videoFile,
-    required String title,
-    required String description,
-    ProgressCallback? onProgress,
-  }) async {
-    if (_auth.currentUser == null) {
-      throw Exception('User must be logged in to upload videos');
-    }
-
+  Future<String> uploadVideo(File videoFile, String userId, ProgressCallback onProgress) async {
     try {
       // Compress video before uploading
-      final File? compressedVideo = await _compressVideo(videoFile);
-      final File fileToUpload = compressedVideo ?? videoFile;
+      final MediaInfo? compressedInfo = await compressVideo(videoFile.path);
+      final File fileToUpload = compressedInfo?.file ?? videoFile;
       
       // Generate a unique filename
-      final String fileName = '${DateTime.now().millisecondsSinceEpoch}_${path.basename(fileToUpload.path)}';
-      final String userId = _auth.currentUser!.uid;
-      
-      // Create storage reference
-      final Reference storageRef = _storage.ref().child('videos/$userId/$fileName');
-      
-      // Generate thumbnail before uploading video
-      final String? thumbnailUrl = await _generateThumbnail(fileToUpload.path);
-      
-      // Upload video file with metadata and progress monitoring
-      final UploadTask uploadTask = storageRef.putFile(
+      final String filename = '${userId}_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final Reference ref = _storage.ref().child('videos/$filename');
+
+      // Upload the video
+      final UploadTask uploadTask = ref.putFile(
         fileToUpload,
-        SettableMetadata(
-          contentType: 'video/mp4',
-          customMetadata: {
-            'userId': userId,
-            'originalName': path.basename(videoFile.path),
-            'isCompressed': (compressedVideo != null).toString(),
-          },
-        ),
+        SettableMetadata(contentType: 'video/mp4'),
       );
 
       // Monitor upload progress
-      uploadTask.snapshotEvents.listen(
-        (TaskSnapshot snapshot) {
-          final progress = snapshot.bytesTransferred / snapshot.totalBytes;
-          onProgress?.call(progress);
-        },
-        onError: (error) {
-          print('Upload error: $error');
-          throw error;
-        },
-      );
-
-      // Wait for upload to complete with retry logic
-      TaskSnapshot snapshot;
-      int retryCount = 0;
-      while (true) {
-        try {
-          snapshot = await uploadTask;
-          break;
-        } catch (e) {
-          if (retryCount >= maxRetries) rethrow;
-          retryCount++;
-          await Future.delayed(Duration(seconds: retryCount * 2)); // Exponential backoff
-          continue;
-        }
-      }
-
-      final String downloadUrl = await snapshot.ref.getDownloadURL();
-
-      // Create video document in Firestore
-      final DocumentReference videoDoc = await _firestore.collection('videos').add({
-        'userId': userId,
-        'title': title,
-        'description': description,
-        'videoUrl': downloadUrl,
-        'thumbnailUrl': thumbnailUrl ?? '',
-        'createdAt': FieldValue.serverTimestamp(),
-        'likes': 0,
-        'comments': 0,
-        'shares': 0,
-        'fileName': fileName,
-        'fileSize': await fileToUpload.length(),
-        'originalSize': await videoFile.length(),
-        'isCompressed': compressedVideo != null,
-        'duration': 0, // TODO: Add video duration
+      uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
+        final double progress = snapshot.bytesTransferred / snapshot.totalBytes;
+        onProgress(progress);
       });
 
-      // Clean up compressed file if it was created
-      if (compressedVideo != null && compressedVideo.existsSync()) {
-        await compressedVideo.delete();
-      }
+      // Wait for upload to complete
+      await uploadTask;
 
-      return videoDoc.id;
+      // Get download URL
+      final String downloadUrl = await ref.getDownloadURL();
+      return downloadUrl;
     } catch (e) {
-      print('Error in uploadVideo: $e');
-      throw Exception('Failed to upload video: ${e.toString()}');
+      print('Error uploading video: $e');
+      rethrow;
     }
   }
 

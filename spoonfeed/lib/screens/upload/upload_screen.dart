@@ -6,6 +6,8 @@ import 'package:video_player/video_player.dart';
 import 'package:universal_html/html.dart' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../services/video_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class UploadScreen extends StatefulWidget {
   const UploadScreen({Key? key}) : super(key: key);
@@ -23,6 +25,7 @@ class _UploadScreenState extends State<UploadScreen> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   late final VideoService _videoService;
+  final _firestore = FirebaseFirestore.instance;
 
   @override
   void initState() {
@@ -75,72 +78,48 @@ class _UploadScreenState extends State<UploadScreen> {
     });
 
     try {
-      if (kIsWeb) {
-        // Handle web upload
-        final bytes = await _videoFile!.readAsBytes();
-        
-        // Check file size (100MB limit)
-        if (bytes.length > 100 * 1024 * 1024) {
-          throw Exception('File size exceeds 100MB limit');
-        }
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw Exception('User must be logged in to upload videos');
 
-        await _videoService.uploadVideoWeb(
-          videoBytes: bytes,
-          fileName: _videoFile!.name,
-          title: _titleController.text,
-          description: _descriptionController.text,
-          onProgress: (progress) {
-            if (mounted) {
-              setState(() {
-                _uploadProgress = progress;
-              });
-            }
-          },
-        );
-      } else {
-        // Handle mobile upload
-        final file = File(_videoFile!.path);
-        
-        // Check file size (100MB limit)
-        if (await file.length() > 100 * 1024 * 1024) {
-          throw Exception('File size exceeds 100MB limit');
-        }
+      final videoFile = File(_videoFile!.path);
+      final downloadUrl = await _videoService.uploadVideo(
+        videoFile,
+        user.uid,
+        (progress) {
+          setState(() {
+            _uploadProgress = progress;
+          });
+        },
+      );
 
-        await _videoService.uploadVideo(
-          videoFile: file,
-          title: _titleController.text,
-          description: _descriptionController.text,
-          onProgress: (progress) {
-            if (mounted) {
-              setState(() {
-                _uploadProgress = progress;
-              });
-            }
-          },
-        );
-      }
-      
+      // Create video document in Firestore
+      await _firestore.collection('videos').add({
+        'userId': user.uid,
+        'title': _titleController.text,
+        'description': _descriptionController.text,
+        'videoUrl': downloadUrl,
+        'thumbnailUrl': '', // TODO: Add thumbnail generation
+        'createdAt': FieldValue.serverTimestamp(),
+        'likes': 0,
+        'comments': 0,
+        'shares': 0,
+      });
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Video uploaded successfully!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.pop(context);
+        Navigator.of(context).pop(true);
       }
     } catch (e) {
+      print('Error uploading video: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error uploading video: $e')),
+        );
+      }
+    } finally {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _uploadProgress = 0.0;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error uploading video: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
       }
     }
   }

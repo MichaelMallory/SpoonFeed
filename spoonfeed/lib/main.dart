@@ -13,6 +13,7 @@ import 'screens/upload/upload_screen.dart';
 import 'screens/profile/profile_screen.dart';
 import 'services/auth_service.dart';
 import 'services/config_service.dart';
+import 'services/game_service.dart';
 
 // Initialize logger for debugging
 final logger = Logger();
@@ -31,7 +32,14 @@ void main() async {
     logger.e('Failed to initialize Firebase: $e');
   }
   
-  runApp(const SpoonFeedApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => GameService()),
+      ],
+      child: const SpoonFeedApp(),
+    ),
+  );
 }
 
 class SpoonFeedApp extends StatelessWidget {

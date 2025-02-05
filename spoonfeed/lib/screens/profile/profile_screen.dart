@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../services/auth_service.dart';
+import '../../services/game_service.dart';
 import '../../models/user_model.dart';
+import '../../models/game_score_model.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -13,7 +15,9 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final AuthService _authService = AuthService();
+  final GameService _gameService = GameService();
   UserModel? _user;
+  GameScoreModel? _gameScore;
   bool _isLoading = true;
 
   @override
@@ -31,9 +35,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
 
       final userData = await _authService.getUserData(currentUser.uid);
+      final gameScore = await _gameService.getUserScore();
+      
       if (mounted) {
         setState(() {
           _user = userData;
+          _gameScore = gameScore;
           _isLoading = false;
         });
       }
@@ -156,6 +163,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         _buildStat('Recipes', _user?.recipes.length ?? 0),
                       ],
                     ),
+                    if (_gameScore != null) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Spoon Slash Stats',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _buildStat('High Score', _gameScore!.highScore),
+                          _buildStat('Games Played', _gameScore!.gamesPlayed),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -24,7 +24,7 @@ class VideoPlayerFullscreen extends StatefulWidget {
 }
 
 class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with AutomaticKeepAliveClientMixin {
-  late VideoPlayerController _controller;
+  VideoPlayerController? _controller;
   bool _isInitialized = false;
   final VideoService _videoService = VideoService();
   bool _isLiked = false;
@@ -57,12 +57,12 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     if (widget.isActive != oldWidget.isActive) {
       print('Video active state changed: ${widget.isActive}');
       if (widget.isActive) {
-        _controller.play();
+        _controller?.play();
       } else {
-        _controller.pause();
+        _controller?.pause();
         if (!widget.shouldPreload) {
-          _controller.setVolume(0);
-          _controller.seekTo(Duration.zero);
+          _controller?.setVolume(0);
+          _controller?.seekTo(Duration.zero);
         }
       }
     }
@@ -70,32 +70,54 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
 
   Future<void> _initializeVideo() async {
     try {
+      print('[VideoPlayer] Starting initialization for video: ${widget.video.id}');
       final videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
+      print('[VideoPlayer] Retrieved video URL: $videoUrl');
       
+      print('[VideoPlayer] Creating controller for ${kIsWeb ? 'web' : 'file'} playback');
       _controller = kIsWeb
           ? VideoPlayerController.networkUrl(Uri.parse(videoUrl))
           : VideoPlayerController.file(File(videoUrl));
 
-      await _controller.initialize();
+      print('[VideoPlayer] Initializing controller');
+      await _controller?.initialize();
+      
+      final value = _controller?.value;
+      print('[VideoPlayer] Controller initialized:');
+      print('[VideoPlayer] - Video size: ${value?.size}');
+      print('[VideoPlayer] - Duration: ${value?.duration}');
+      print('[VideoPlayer] - Is playing: ${value?.isPlaying}');
+      print('[VideoPlayer] - Position: ${value?.position}');
+      print('[VideoPlayer] - Buffered: ${value?.buffered}');
+      
+      await _controller?.setLooping(true);
+      print('[VideoPlayer] Looping enabled');
       
       if (widget.isActive) {
-        _controller.play();
+        print('[VideoPlayer] Video is active, starting playback');
+        _controller?.play();
       } else if (widget.shouldPreload) {
-        // If preloading, just initialize but don't play
-        await _controller.setVolume(0);
-        await _controller.seekTo(Duration.zero);
+        print('[VideoPlayer] Preloading video without playback');
+        await _controller?.setVolume(0);
+        await _controller?.seekTo(Duration.zero);
       }
 
       if (mounted) {
         setState(() {
           _isInitialized = true;
+          print('[VideoPlayer] State updated: initialized = true');
         });
+      } else {
+        print('[VideoPlayer] Widget not mounted after initialization');
       }
-    } catch (e) {
-      print('Error initializing video: $e');
+    } catch (e, stackTrace) {
+      print('[VideoPlayer] Error initializing video:');
+      print('[VideoPlayer] Error: $e');
+      print('[VideoPlayer] Stack trace: $stackTrace');
       if (mounted) {
         setState(() {
           _isInitialized = false;
+          print('[VideoPlayer] State updated: initialized = false due to error');
         });
       }
     }
@@ -103,17 +125,17 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   void _togglePlayPause() {
     setState(() {
-      if (_controller.value.isPlaying) {
-        _controller.pause();
+      if (_controller?.value.isPlaying ?? false) {
+        _controller?.pause();
       } else {
-        _controller.play();
-        _controller.setVolume(1.0);
+        _controller?.play();
+        _controller?.setVolume(1.0);
       }
     });
   }
@@ -187,7 +209,17 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   Widget build(BuildContext context) {
     super.build(context);
     final size = MediaQuery.of(context).size;
-    print('Building video player. Screen size: ${size.width} x ${size.height}');
+    print('[VideoPlayer] Building video player. Screen size: ${size.width} x ${size.height}');
+    print('[VideoPlayer] Initialized: $_isInitialized, Active: ${widget.isActive}');
+    
+    if (_controller?.value.hasError ?? false) {
+      print('[VideoPlayer] Controller has error: ${_controller?.value.errorDescription}');
+    }
+
+    if (_isInitialized && _controller != null) {
+      print('[VideoPlayer] Video aspect ratio: ${_controller!.value.aspectRatio}');
+      print('[VideoPlayer] Container color: ${Colors.transparent}');
+    }
 
     return Container(
       color: Colors.black,
@@ -195,19 +227,62 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
         fit: StackFit.expand,
         children: [
           // Video Layer
-          Container(
-            child: _isInitialized
+          Positioned.fill(
+            child: _isInitialized && _controller != null
                 ? GestureDetector(
                     onTap: _togglePlayPause,
-                    child: Center(
-                      child: AspectRatio(
-                        aspectRatio: _controller.value.aspectRatio,
-                        child: VideoPlayer(_controller),
+                    child: Container(
+                      color: Colors.black,
+                      child: Center(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            print('[VideoPlayer] Layout constraints: ${constraints.maxWidth} x ${constraints.maxHeight}');
+                            
+                            // Calculate video dimensions to maintain aspect ratio
+                            final videoAspectRatio = _controller!.value.aspectRatio;
+                            final screenAspectRatio = constraints.maxWidth / constraints.maxHeight;
+                            
+                            double videoWidth;
+                            double videoHeight;
+                            
+                            if (videoAspectRatio < screenAspectRatio) {
+                              // Video is taller than screen
+                              videoWidth = constraints.maxWidth;
+                              videoHeight = videoWidth / videoAspectRatio;
+                            } else {
+                              // Video is wider than screen
+                              videoHeight = constraints.maxHeight;
+                              videoWidth = videoHeight * videoAspectRatio;
+                            }
+                            
+                            print('[VideoPlayer] Calculated video size: $videoWidth x $videoHeight');
+                            
+                            return Container(
+                              width: videoWidth,
+                              height: videoHeight,
+                              color: Colors.black,
+                              child: VideoPlayer(_controller!),
+                            );
+                          },
+                        ),
                       ),
                     ),
                   )
-                : const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
+                : Container(
+                    color: Colors.black,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(color: Colors.white),
+                          SizedBox(height: 16),
+                          Text(
+                            'Initializing Video...',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
           ),
 
@@ -215,7 +290,7 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
           Positioned(
             left: 16,
             right: 72,
-            bottom: 16,
+            bottom: MediaQuery.of(context).padding.bottom + 80,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -225,6 +300,13 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                     color: Colors.white,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
+                    shadows: [
+                      Shadow(
+                        blurRadius: 4.0,
+                        color: Colors.black,
+                        offset: Offset(1.0, 1.0),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -233,6 +315,13 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14,
+                    shadows: [
+                      Shadow(
+                        blurRadius: 4.0,
+                        color: Colors.black,
+                        offset: Offset(1.0, 1.0),
+                      ),
+                    ],
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -244,7 +333,7 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
           // Right side action buttons
           Positioned(
             right: 8,
-            bottom: 80,
+            bottom: MediaQuery.of(context).padding.bottom + 120,
             child: Column(
               children: [
                 _ActionButton(
