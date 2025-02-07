@@ -16,71 +16,63 @@ class VideoCompressionService {
 
   // Valid video formats
   static const List<String> _validFormats = ['.mp4', '.mov', '.avi', '.mkv', '.wmv'];
-  static const int maxRetries = 3;
+  
+  // Size thresholds
+  static const int _compressionThreshold = 40 * 1024 * 1024; // 40MB
+  static const int _maxFileSize = 100 * 1024 * 1024; // 100MB
 
   Future<File?> compressVideo(
     String videoPath, {
     void Function(double)? onProgress,
     bool isWeb = false,
-    VideoQuality? forcedQuality,
   }) async {
     if (isWeb) {
       print('[VideoCompressionService] Web platform detected, compression not supported');
       return File(videoPath);
     }
 
-    // Validate video format
-    final extension = path.extension(videoPath).toLowerCase();
-    if (!_validFormats.contains(extension)) {
-      print('[VideoCompressionService] ❌ Unsupported video format: $extension');
-      print('  - Supported formats: ${_validFormats.join(", ")}');
-      return null;
-    }
-
-    int retryCount = 0;
-    File? result;
-    Exception? lastError;
-
-    while (retryCount < maxRetries && result == null) {
-      try {
-        if (retryCount > 0) {
-          print('\n[VideoCompressionService] 🔄 Retry attempt ${retryCount + 1}/$maxRetries');
-          // Add exponential backoff
-          await Future.delayed(Duration(seconds: retryCount * 2));
-        }
-
-        result = await _attemptCompression(
-          videoPath,
-          onProgress: onProgress,
-          forcedQuality: forcedQuality,
-          retryCount: retryCount,
-        );
-      } catch (e, stackTrace) {
-        lastError = e is Exception ? e : Exception(e.toString());
-        _logError(e, stackTrace);
-        retryCount++;
-        
-        if (retryCount >= maxRetries) {
-          print('[VideoCompressionService] ❌ Max retries reached');
-          print('  - Last error: $lastError');
-        }
-      }
-    }
-
-    return result;
-  }
-
-  Future<File?> _attemptCompression(
-    String videoPath, {
-    void Function(double)? onProgress,
-    VideoQuality? forcedQuality,
-    required int retryCount,
-  }) async {
     try {
-      print('[VideoCompressionService] 🎬 Starting video compression...');
+      print('[VideoCompressionService] 🎬 Starting video process...');
       print('  - Input path: $videoPath');
-      print('  - Retry count: $retryCount');
+
+      // Create temp directory for video processing
+      final tempDir = await getTemporaryDirectory();
       
+      // Try to clean up space first
+      try {
+        final processingDir = Directory('${tempDir.path}/video_processing');
+        await _cleanupProcessingDir(processingDir);
+        await VideoCompress.deleteAllCache();
+        
+        // Also clean temp directory
+        final tempContents = await tempDir.list().toList();
+        for (var entity in tempContents) {
+          if (entity is File) {
+            try {
+              await entity.delete();
+            } catch (_) {}
+          }
+        }
+      } catch (e) {
+        print('[VideoCompressionService] Error during cleanup: $e');
+      }
+
+      final processingDir = Directory('${tempDir.path}/video_processing');
+      if (!await processingDir.exists()) {
+        await processingDir.create(recursive: true);
+      }
+
+      // Clean up any old files in processing directory
+      await _cleanupProcessingDir(processingDir);
+
+      // Validate video format
+      final extension = path.extension(videoPath).toLowerCase();
+      if (!_validFormats.contains(extension)) {
+        print('[VideoCompressionService] ❌ Unsupported video format: $extension');
+        print('  - Supported formats: ${_validFormats.join(", ")}');
+        return null;
+      }
+
       final inputFile = File(videoPath);
       if (!await inputFile.exists()) {
         print('[VideoCompressionService] ❌ Input file does not exist');
@@ -90,76 +82,118 @@ class VideoCompressionService {
       final inputSize = await inputFile.length();
       print('  - Input size: ${_formatFileSize(inputSize)}');
 
-      // Set up progress monitoring
-      _setupProgressMonitoring(onProgress);
+      // Check available storage space
+      final storageSpace = await _checkAvailableStorage();
+      final requiredSpace = inputSize * 3; // We need about 3x the input size for processing
+      
+      if (storageSpace < requiredSpace) {
+        print('[VideoCompressionService] ❌ Insufficient storage space:');
+        print('  - Available: ${_formatFileSize(storageSpace)}');
+        print('  - Required: ${_formatFileSize(requiredSpace)}');
+        return null;
+      }
 
-      // Generate output path
-      final outputPath = await _generateOutputPath(videoPath);
-      print('  - Output path: $outputPath');
-
-      // Get video info before compression
+      // Get video info
       final info = await VideoCompress.getMediaInfo(videoPath);
-      _logVideoInfo('Before compression', info);
-
-      // Validate video duration and dimensions
       if (!_validateVideoProperties(info)) {
         return null;
       }
 
-      print('[VideoCompressionService] 🔄 Compressing video...');
-      
-      final result = await VideoCompress.compressVideo(
-        videoPath,
-        quality: VideoQuality.MediumQuality, // Force medium quality for better compatibility
-        deleteOrigin: false,
-        includeAudio: true,
-        frameRate: 30,
-      );
+      // Always compress if resolution is high, regardless of file size
+      final shouldCompress = inputSize >= _compressionThreshold || 
+                           (info.width != null && info.width! > 1080);
 
-      if (result == null || result.file == null) {
-        print('[VideoCompressionService] ❌ Compression failed - no output generated');
-        return null;
-      }
-
-      final outputFile = result.file!;
-      final outputSize = await outputFile.length();
-      
-      // Get video info after compression
-      final compressedInfo = await VideoCompress.getMediaInfo(outputFile.path);
-      _logVideoInfo('After compression', compressedInfo);
-
-      // Validate compressed video
-      if (!_validateCompressedVideo(compressedInfo)) {
+      if (!shouldCompress) {
+        print('[VideoCompressionService] ℹ️ File is under compression threshold and has acceptable resolution');
+        print('  - Threshold: ${_formatFileSize(_compressionThreshold)}');
+        print('  - Resolution: ${info.width}x${info.height}');
         return inputFile;
       }
 
+      // Set up progress monitoring
+      _setupProgressMonitoring(onProgress);
+
+      print('[VideoCompressionService] 🔄 Compressing video...');
+      print('  - Original resolution: ${info.width}x${info.height}');
+      
+      // Clear cache before compression
+      await VideoCompress.deleteAllCache();
+      await _cleanupProgress();
+
+      // Set the output path in our processing directory
+      final outputPath = '${processingDir.path}/compressed_${DateTime.now().millisecondsSinceEpoch}$extension';
+      
+      // Determine quality based on resolution and file size
+      VideoQuality quality;
+      if (info.width! > 1920 || inputSize > 50 * 1024 * 1024) {
+        quality = VideoQuality.MediumQuality;
+      } else if (info.width! > 1080 || inputSize > 20 * 1024 * 1024) {
+        quality = VideoQuality.DefaultQuality;
+      } else {
+        quality = VideoQuality.HighestQuality;
+      }
+      
+      print('[VideoCompressionService] Using quality setting: $quality');
+      
+      // Try compression with shorter timeout
+      final result = await VideoCompress.compressVideo(
+        videoPath,
+        quality: quality,
+        deleteOrigin: false,
+        includeAudio: true,
+        frameRate: 30,
+      ).timeout(
+        const Duration(seconds: 45),  // Much shorter timeout - fail fast if not working
+        onTimeout: () {
+          print('[VideoCompressionService] ❌ Compression timed out after 45 seconds');
+          throw TimeoutException('Video compression timed out - please try again');
+        },
+      );
+
+      await _cleanupProgress();
+
+      if (result == null || result.file == null) {
+        print('[VideoCompressionService] ❌ Compression failed - no output generated');
+        print('  - Falling back to original file');
+        return inputFile;
+      }
+
+      final outputFile = result.file!;
+      if (!await outputFile.exists()) {
+        print('[VideoCompressionService] ❌ Output file does not exist');
+        return inputFile;
+      }
+
+      final outputSize = await outputFile.length();
+      
       print('[VideoCompressionService] 📊 Compression results:');
       print('  - Original size: ${_formatFileSize(inputSize)}');
       print('  - Compressed size: ${_formatFileSize(outputSize)}');
       print('  - Reduction: ${((1 - outputSize / inputSize) * 100).toStringAsFixed(1)}%');
 
-      // Check if compression actually reduced file size
-      if (outputSize >= inputSize) {
-        print('[VideoCompressionService] ⚠️ Compression did not reduce file size');
+      // Use original if compression didn't help or output is too small (likely failed)
+      if (outputSize >= inputSize || outputSize < 1024) {
+        print('[VideoCompressionService] ⚠️ Compression did not reduce file size or output is too small, using original');
         return inputFile;
       }
 
       print('[VideoCompressionService] ✅ Video compressed successfully');
       return outputFile;
     } catch (e, stackTrace) {
-      print('[VideoCompressionService] ❌ Error during compression attempt $retryCount:');
+      print('[VideoCompressionService] ❌ Error during compression:');
       print('  - Error: $e');
       print('  - Stack trace: $stackTrace');
       
-      if (retryCount < maxRetries - 1) {
-        print('[VideoCompressionService] 🔄 Will retry with different settings...');
-        return null;
-      } else {
-        print('[VideoCompressionService] ❌ Max retries reached, using original file');
-        return File(videoPath);
-      }
+      // Cancel any ongoing compression on error
+      try {
+        await VideoCompress.cancelCompression();
+      } catch (_) {}
+      
+      return File(videoPath);  // Return original file on error
     } finally {
+      // Clean up
       await _cleanupProgress();
+      await VideoCompress.deleteAllCache();
     }
   }
 
@@ -189,38 +223,47 @@ class VideoCompressionService {
     return true;
   }
 
-  bool _validateCompressedVideo(MediaInfo info) {
-    if (info.filesize == null || info.filesize! <= 0) {
-      print('[VideoCompressionService] ❌ Invalid compressed file size');
-      return false;
-    }
-
-    if (info.path == null || !File(info.path!).existsSync()) {
-      print('[VideoCompressionService] ❌ Compressed file does not exist');
-      return false;
-    }
-
-    return true;
-  }
-
   Future<void> cancelCompression() async {
     try {
       print('[VideoCompressionService] 🛑 Cancelling compression...');
       await VideoCompress.cancelCompression();
       await _cleanupProgress();
       print('[VideoCompressionService] ✅ Compression cancelled');
-    } catch (e, stackTrace) {
-      _logError(e, stackTrace);
+    } catch (e) {
+      print('[VideoCompressionService] Error cancelling compression: $e');
     }
   }
 
   void _setupProgressMonitoring(void Function(double)? onProgress) {
     _progressSubscription?.unsubscribe();
+    double lastProgress = 0.0;
+    var lastProgressUpdate = DateTime.now();
+    int stallCount = 0;
+    
     _progressSubscription = VideoCompress.compressProgress$.subscribe((progress) {
-      // Ensure progress is between 0 and 100
-      final normalizedProgress = progress.clamp(0.0, 1.0);
-      print('[VideoCompressionService] Progress: ${(normalizedProgress * 100).toStringAsFixed(1)}%');
-      onProgress?.call(normalizedProgress);
+      final now = DateTime.now();
+      
+      // Check for stalled progress
+      final stallDuration = now.difference(lastProgressUpdate);
+      if (stallDuration.inSeconds > 5 && progress < 0.95) {  // Allow longer at the end
+        print('[VideoCompressionService] ⚠️ Progress stalled for ${stallDuration.inSeconds} seconds at ${(progress * 100).toStringAsFixed(1)}%');
+        stallCount++;
+        
+        // If progress is stalled for too long, throw error
+        if (stallCount >= 3 || (progress < 0.1 && stallDuration.inSeconds > 10)) {
+          throw Exception('Compression appears to be stuck - please try again');
+        }
+      }
+      
+      // Only report progress if it has increased
+      if (progress > lastProgress) {
+        lastProgress = progress;
+        lastProgressUpdate = now;
+        stallCount = 0;  // Reset stall count when we make progress
+        final normalizedProgress = progress.clamp(0.0, 1.0);
+        print('[VideoCompressionService] Progress: ${(normalizedProgress * 100).toStringAsFixed(1)}%');
+        onProgress?.call(normalizedProgress);
+      }
     });
   }
 
@@ -233,40 +276,6 @@ class VideoCompressionService {
     }
   }
 
-  VideoQuality _determineCompressionQuality(int fileSize) {
-    // Size thresholds in bytes
-    const int highQualityThreshold = 50 * 1024 * 1024; // 50MB
-    const int mediumQualityThreshold = 100 * 1024 * 1024; // 100MB
-
-    if (fileSize < highQualityThreshold) {
-      return VideoQuality.MediumQuality;
-    } else if (fileSize < mediumQualityThreshold) {
-      return VideoQuality.LowQuality;
-    } else {
-      // Always use medium quality for better compatibility
-      return VideoQuality.MediumQuality;
-    }
-  }
-
-  Future<String> _generateOutputPath(String inputPath) async {
-    final dir = await getTemporaryDirectory();
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final originalFileName = path.basename(inputPath);
-    final extension = path.extension(originalFileName);
-    return path.join(dir.path, 'compressed_${timestamp}$extension');
-  }
-
-  void _logVideoInfo(String stage, MediaInfo info) {
-    print('[$stage]');
-    print('  - Path: ${info.path}');
-    print('  - File size: ${_formatFileSize(info.filesize ?? 0)}');
-    print('  - Duration: ${(info.duration ?? 0) / 1000.0} seconds');
-    print('  - Width: ${info.width}');
-    print('  - Height: ${info.height}');
-    if (info.author != null) print('  - Author: ${info.author}');
-    if (info.title != null) print('  - Title: ${info.title}');
-  }
-
   String _formatFileSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
@@ -274,9 +283,62 @@ class VideoCompressionService {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
-  void _logError(dynamic error, StackTrace stackTrace) {
-    print('[VideoCompressionService] ❌ Error during compression:');
-    print('  - Error: $error');
-    print('  - Stack trace: $stackTrace');
+  Future<void> _cleanupProcessingDir(Directory dir) async {
+    try {
+      if (await dir.exists()) {
+        final entities = await dir.list().toList();
+        for (var entity in entities) {
+          if (entity is File) {
+            await entity.delete();
+          }
+        }
+      }
+    } catch (e) {
+      print('[VideoCompressionService] Error cleaning processing directory: $e');
+    }
+  }
+
+  Future<int> _checkAvailableStorage() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      
+      if (Platform.isAndroid) {
+        // On Android, we need to use df command to get actual free space
+        final result = await Process.run('df', [tempDir.path]);
+        if (result.exitCode == 0) {
+          // Parse df output to get available space
+          final lines = result.stdout.toString().split('\n');
+          if (lines.length >= 2) {
+            final parts = lines[1].split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
+            if (parts.length >= 4) {
+              // Available space is in 1K blocks, convert to bytes
+              final availableKB = int.tryParse(parts[3]) ?? 0;
+              return availableKB * 1024;
+            }
+          }
+        }
+        
+        // Fallback: try to write a test file to check space
+        try {
+          final testFile = File('${tempDir.path}/space_test');
+          await testFile.writeAsBytes(List.filled(1024 * 1024, 0)); // Try to write 1MB
+          final freeSpace = await testFile.length() * 100; // Estimate 100x this as free space
+          await testFile.delete();
+          return freeSpace;
+        } catch (e) {
+          print('[VideoCompressionService] Error checking space with test file: $e');
+        }
+      }
+      
+      // For other platforms or if Android methods fail, assume we have enough space
+      // but log a warning
+      print('[VideoCompressionService] ⚠️ Could not accurately determine free space, proceeding with compression');
+      return 1024 * 1024 * 1024; // Assume 1GB available
+    } catch (e) {
+      print('[VideoCompressionService] Error checking storage: $e');
+      // If we can't check space, assume we have enough but log it
+      print('[VideoCompressionService] ⚠️ Proceeding with compression despite space check failure');
+      return 1024 * 1024 * 1024; // Assume 1GB available
+    }
   }
 } 

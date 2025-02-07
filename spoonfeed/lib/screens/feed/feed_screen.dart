@@ -20,6 +20,8 @@ class _FeedScreenState extends State<FeedScreen> {
   final PageController _pageController = PageController();
   final List<VideoModel> _videos = [];
   bool _isLoadingMore = false;
+  bool _hasMoreVideos = true;
+  DocumentSnapshot? _lastDocument;
   int _currentVideoIndex = 0;
 
   @override
@@ -35,33 +37,66 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _loadInitialVideos() async {
+    if (_isLoadingMore) return;
     setState(() => _isLoadingMore = true);
 
     try {
       final docs = await _videoService.loadMoreVideos();
+      if (docs.isEmpty) {
+        setState(() {
+          _hasMoreVideos = false;
+          _isLoadingMore = false;
+        });
+        return;
+      }
+
       setState(() {
+        _videos.clear(); // Clear existing videos
         _videos.addAll(docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
+        _lastDocument = docs.isNotEmpty ? docs.last['id'] : null;
         _isLoadingMore = false;
       });
     } catch (e) {
-      print('Error loading initial videos: $e');
+      print('[FeedScreen] ❌ Error loading initial videos: $e');
       setState(() => _isLoadingMore = false);
     }
   }
 
   Future<void> _loadMoreVideos() async {
-    if (_isLoadingMore) return;
+    if (_isLoadingMore || !_hasMoreVideos) return;
 
     setState(() => _isLoadingMore = true);
 
     try {
-      final docs = await _videoService.loadMoreVideos();
-      setState(() {
-        _videos.addAll(docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
-        _isLoadingMore = false;
-      });
+      final docs = await _videoService.loadMoreVideos(
+        lastDocument: _lastDocument,
+      );
+
+      if (docs.isEmpty) {
+        setState(() {
+          _hasMoreVideos = false;
+          _isLoadingMore = false;
+        });
+        return;
+      }
+
+      // Check for duplicates before adding
+      final newVideos = docs.map((doc) => VideoModel.fromFirestore(doc)).where((video) {
+        return !_videos.any((existing) => existing.id == video.id);
+      }).toList();
+
+      if (newVideos.isNotEmpty) {
+        setState(() {
+          _videos.addAll(newVideos);
+          _lastDocument = docs.last['id'];
+        });
+      } else {
+        _hasMoreVideos = false;
+      }
+
+      setState(() => _isLoadingMore = false);
     } catch (e) {
-      print('Error loading more videos: $e');
+      print('[FeedScreen] ❌ Error loading more videos: $e');
       setState(() => _isLoadingMore = false);
     }
   }
@@ -70,64 +105,24 @@ class _FeedScreenState extends State<FeedScreen> {
     setState(() => _currentVideoIndex = index);
     
     // Load more videos when user reaches near the end
-    if (index >= _videos.length - 3) {
+    if (_hasMoreVideos && index >= _videos.length - 3) {
       _loadMoreVideos();
     }
   }
 
   Widget _buildGameDots(BuildContext context, GameService gameService) {
     return GestureDetector(
-      onTap: () {
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: Colors.black87,
-              title: const Text(
-                'Start Spoon Slash?',
-                style: TextStyle(color: Colors.white),
-              ),
-              content: const Text(
-                'Play while watching videos! Slice ingredients as they fly across the screen.',
-                style: TextStyle(color: Colors.white70),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop(); // Close dialog
-                  },
-                  child: const Text('Not Now'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop(); // Close dialog
-                    gameService.toggleGameMode(); // Start game
-                  },
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    backgroundColor: Colors.orange,
-                  ),
-                  child: const Text('Play'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-      child: Row(
-        children: List.generate(
-          3,
-          (index) => Container(
-            width: 6,
-            height: 6,
-            margin: const EdgeInsets.symmetric(horizontal: 1.5),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: index < (gameService.lives)
-                  ? Colors.white
-                  : Colors.white.withOpacity(0.3),
-            ),
-          ),
+      onTap: () => gameService.toggleGameMode(),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Icon(
+          Icons.sports_esports,
+          color: gameService.isGameModeActive ? Colors.orange : Colors.white,
+          size: 24,
         ),
       ),
     );
@@ -182,22 +177,12 @@ class _FeedScreenState extends State<FeedScreen> {
 
         // Game dots in top right - Ensure it's above video
         Positioned(
-          top: MediaQuery.of(context).padding.top + 48,
+          top: MediaQuery.of(context).padding.top + 8,
           right: 12,
           child: Consumer<GameService>(
             builder: (context, gameService, child) {
               print('[FeedScreen] Building game dots, isActive: ${gameService.isGameModeActive}');
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque, // Make sure touches are detected
-                onTap: () {
-                  print('[FeedScreen] Game dots tapped');
-                  gameService.toggleGameMode();
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(8), // Add padding for larger touch target
-                  child: _buildGameDots(context, gameService),
-                ),
-              );
+              return _buildGameDots(context, gameService);
             },
           ),
         ),
@@ -209,11 +194,26 @@ class _FeedScreenState extends State<FeedScreen> {
             right: 0,
             bottom: 0,
             height: MediaQuery.of(context).size.height * 0.5,
-            child: SpoonSlashGameWidget(
-              onScoreChanged: (score) {
-                print('[FeedScreen] Game score updated: $score');
-                context.read<GameService>().updateScore(score);
-              },
+            child: Stack(
+              children: [
+                SpoonSlashGameWidget(
+                  onScoreChanged: (score) {
+                    print('[FeedScreen] Game score updated: $score');
+                    context.read<GameService>().updateScore(score);
+                  },
+                ),
+                // Position interaction buttons below game area
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ... existing interaction buttons ...
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
 

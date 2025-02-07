@@ -44,27 +44,45 @@ class _CommentsSheetState extends State<CommentsSheet> {
   }
 
   Future<void> _loadComments() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
+    
     try {
       final comments = await widget.videoService.getVideoComments(widget.videoId);
+      if (!mounted) return;
+      
       setState(() {
-        _comments = comments.map((doc) => CommentModel.fromMap(doc)).toList();
+        _comments = comments
+            .map((doc) => CommentModel.fromMap(doc))
+            .where((comment) => 
+                comment.text.isNotEmpty && 
+                comment.userId.isNotEmpty)
+            .toList();
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading comments: $e');
+      print('[CommentsSheet] Error loading comments: $e');
+      if (!mounted) return;
       setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to load comments')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to load comments. Please try again.')),
+      );
     }
   }
 
   Future<void> _submitComment() async {
     final text = _commentController.text.trim();
     if (text.isEmpty) return;
+
+    if (!mounted) return;
+    
+    // Check if user is logged in
+    if (FirebaseAuth.instance.currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in to comment')),
+      );
+      return;
+    }
 
     setState(() => _isSubmitting = true);
     try {
@@ -74,30 +92,39 @@ class _CommentsSheetState extends State<CommentsSheet> {
       );
 
       if (comment != null) {
+        // Clear text before updating state to prevent keyboard flicker
+        _commentController.clear();
+        
+        if (!mounted) return;
         setState(() {
           _comments.insert(0, CommentModel.fromMap(comment));
-          _commentController.clear();
           widget.onCommentCountUpdated(_comments.length);
         });
-      }
 
-      // Scroll to top to show new comment
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+        // Scroll to top to show new comment
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to post comment. Please try again.')),
         );
       }
     } catch (e) {
-      print('Error submitting comment: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to post comment')),
-        );
-      }
+      print('[CommentsSheet] Error submitting comment: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to post comment. Please try again.')),
+      );
     } finally {
-      setState(() => _isSubmitting = false);
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
     }
   }
 
@@ -126,6 +153,8 @@ class _CommentsSheetState extends State<CommentsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    
     return Container(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
@@ -147,7 +176,7 @@ class _CommentsSheetState extends State<CommentsSheet> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Comments (${widget.initialCommentCount})',
+                  'Comments (${_comments.length})',  // Use actual count instead of initial
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 IconButton(
@@ -206,44 +235,58 @@ class _CommentsSheetState extends State<CommentsSheet> {
                       ),
           ),
 
-          // Comment Input
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              border: Border(
-                top: BorderSide(
-                  color: Theme.of(context).dividerColor,
+          // Comment Input - Only show if user is logged in
+          if (currentUser != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                border: Border(
+                  top: BorderSide(
+                    color: Theme.of(context).dividerColor,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _commentController,
+                      decoration: const InputDecoration(
+                        hintText: 'Add a comment...',
+                        border: InputBorder.none,
+                      ),
+                      maxLines: null,
+                      textCapitalization: TextCapitalization.sentences,
+                      enabled: !_isSubmitting,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _isSubmitting
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.send),
+                          onPressed: _submitComment,
+                        ),
+                ],
+              ),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: Text(
+                  'Please log in to comment',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).hintColor,
+                  ),
                 ),
               ),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _commentController,
-                    decoration: const InputDecoration(
-                      hintText: 'Add a comment...',
-                      border: InputBorder.none,
-                    ),
-                    maxLines: null,
-                    textCapitalization: TextCapitalization.sentences,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _isSubmitting
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.send),
-                        onPressed: _submitComment,
-                      ),
-              ],
-            ),
-          ),
         ],
       ),
     );

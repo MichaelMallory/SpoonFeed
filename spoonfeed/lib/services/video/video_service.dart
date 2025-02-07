@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:path/path.dart' as path;
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:video_compress/video_compress.dart';
 
 import 'video_compression_service.dart';
 import 'video_thumbnail_service.dart';
@@ -55,14 +56,15 @@ class VideoService {
 
       // Step 2: Generate thumbnail
       print('\n[VideoService] Step 2: Generating thumbnail...');
-      final thumbnailUrl = await _thumbnailService.generateAndUploadThumbnail(
-        compressedVideo.path,
-        isWeb: isWeb,
-      );
-
-      if (thumbnailUrl == null) {
-        print('[VideoService] ❌ Thumbnail generation failed');
-        return null;
+      String? thumbnailUrl;
+      try {
+        thumbnailUrl = await _thumbnailService.generateAndUploadThumbnail(
+          compressedVideo.path,
+          isWeb: isWeb,
+        );
+      } catch (e) {
+        print('[VideoService] ⚠️ Thumbnail generation failed: $e');
+        // Continue without thumbnail
       }
 
       // Step 3: Upload video
@@ -80,29 +82,104 @@ class VideoService {
 
       print('[VideoService] Video URL after upload: $videoUrl');
 
-      // Step 4: Save metadata
-      print('\n[VideoService] Step 4: Saving metadata...');
-      final videoId = await _metadataService.saveVideoMetadata(
-        videoUrl: videoUrl,
-        thumbnailUrl: thumbnailUrl,
-        title: title,
-        description: description,
-        duration: 0, // Will be updated after processing
-        fileSize: await compressedVideo.length(),
-      );
+      // Get video duration and metadata
+      final videoInfo = await VideoCompress.getMediaInfo(compressedVideo.path);
+      var duration = (videoInfo.duration ?? 0).toInt();
+      
+      if (duration <= 0) {
+        print('[VideoService] ⚠️ Invalid duration, attempting to get from original file');
+        final originalInfo = await VideoCompress.getMediaInfo(videoPath);
+        duration = (originalInfo.duration ?? 0).toInt();
+      }
 
-      if (videoId == null) {
-        print('[VideoService] ❌ Metadata save failed');
+      // Ensure we have a valid duration
+      if (duration <= 0) {
+        print('[VideoService] ❌ Could not determine video duration');
         return null;
       }
 
+      // Step 4: Save metadata
+      print('\n[VideoService] Step 4: Saving metadata...');
+      print('  - Duration: ${duration}ms');
+      print('  - File size: ${await compressedVideo.length()} bytes');
+      
+      // Prepare metadata
+      final metadata = {
+        'videoUrl': videoUrl,
+        'thumbnailUrl': thumbnailUrl ?? '',
+        'title': title,
+        'description': description,
+        'duration': duration,
+        'fileSize': await compressedVideo.length(),
+        'status': 'active',
+        'userId': _auth.currentUser?.uid ?? '',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'views': 0,
+        'likes': 0,
+        'shares': 0,
+        'comments': 0,
+        'resolution': '${videoInfo.width}x${videoInfo.height}',
+        'originalFileName': path.basename(videoPath),
+      };
+
+      // Validate required fields
+      final userId = metadata['userId'] as String?;
+      if (userId == null || userId.isEmpty) {
+        print('[VideoService] ❌ No user ID available');
+        return null;
+      }
+
+      // Try to save metadata with retry
+      String? videoId;
+      int retryCount = 0;
+      while (retryCount < 3) {
+        try {
+          videoId = await _metadataService.saveVideoMetadata(
+            videoUrl: metadata['videoUrl'] as String,
+            thumbnailUrl: metadata['thumbnailUrl'] as String,
+            title: metadata['title'] as String,
+            description: metadata['description'] as String,
+            duration: metadata['duration'] as int,
+            fileSize: metadata['fileSize'] as int,
+            additionalMetadata: {
+              'status': metadata['status'],
+              'userId': metadata['userId'],
+              'createdAt': metadata['createdAt'],
+              'updatedAt': metadata['updatedAt'],
+              'views': metadata['views'],
+              'likes': metadata['likes'],
+              'shares': metadata['shares'],
+              'comments': metadata['comments'],
+              'resolution': metadata['resolution'],
+              'originalFileName': metadata['originalFileName'],
+            },
+          );
+          if (videoId != null) break;
+        } catch (e) {
+          print('[VideoService] ⚠️ Metadata save attempt ${retryCount + 1} failed: $e');
+        }
+        retryCount++;
+        if (retryCount < 3) await Future.delayed(Duration(seconds: retryCount));
+      }
+
+      if (videoId == null) {
+        print('[VideoService] ❌ Metadata save failed after $retryCount attempts');
+        return null;
+      }
+
+      print('[VideoService] ✅ Metadata saved successfully');
+      print('  - Video ID: $videoId');
+
       // Step 5: Cache video locally
       print('\n[VideoService] Step 5: Caching video...');
-      await _cacheService.cacheVideo(videoUrl, compressedVideo);
+      try {
+        await _cacheService.cacheVideo(videoUrl, compressedVideo);
+      } catch (e) {
+        print('[VideoService] ⚠️ Cache operation failed: $e');
+        // Continue even if caching fails
+      }
 
-      print('[VideoService] ✅ Video upload process completed successfully');
-      print('  - Video ID: $videoId');
-      print('  - Video URL: $videoUrl');
       return videoId;
     } catch (e, stackTrace) {
       _logError(e, stackTrace);
@@ -260,21 +337,40 @@ class VideoService {
           throw Exception('Video not found');
         }
 
-        final currentLikes = videoDoc.data()?['likes'] ?? 0;
+        // Get actual like count from subcollection
+        final likesCount = await videoRef
+            .collection('likes')
+            .count()
+            .get()
+            .then((value) => value.count);
 
         if (liked) {
-          transaction.set(likeRef, {
-            'userId': user.uid,
-            'timestamp': FieldValue.serverTimestamp(),
-          });
-          transaction.update(videoRef, {'likes': currentLikes + 1});
+          // Only add like if it doesn't exist
+          final likeDoc = await transaction.get(likeRef);
+          if (!likeDoc.exists) {
+            transaction.set(likeRef, {
+              'userId': user.uid,
+              'timestamp': FieldValue.serverTimestamp(),
+            });
+            transaction.update(videoRef, {
+              'likes': (likesCount ?? 0) + 1,
+              'lastLikeSync': FieldValue.serverTimestamp(),
+            });
+          }
         } else {
-          transaction.delete(likeRef);
-          transaction.update(videoRef, {'likes': currentLikes - 1});
+          // Only remove like if it exists
+          final likeDoc = await transaction.get(likeRef);
+          if (likeDoc.exists) {
+            transaction.delete(likeRef);
+            transaction.update(videoRef, {
+              'likes': (likesCount ?? 0) - 1,
+              'lastLikeSync': FieldValue.serverTimestamp(),
+            });
+          }
         }
       });
     } catch (e) {
-      print('[VideoService] Error updating video like: $e');
+      print('[VideoService] ❌ Error updating video like: $e');
     }
   }
 
@@ -304,26 +400,66 @@ class VideoService {
     String text,
   ) async {
     try {
+      print('[VideoService] 💬 Adding comment to video: $videoId');
       final user = _auth.currentUser;
-      if (user == null) return null;
+      if (user == null) {
+        print('[VideoService] ❌ No authenticated user');
+        return null;
+      }
+
+      // Get user data to include in comment
+      final userData = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .get();
 
       final commentRef = await _firestore
           .collection('videos')
           .doc(videoId)
           .collection('comments')
           .add({
+        'videoId': videoId,
         'userId': user.uid,
+        'userDisplayName': userData.data()?['displayName'] ?? user.displayName ?? 'Anonymous',
+        'userPhotoUrl': userData.data()?['photoUrl'] ?? user.photoURL ?? '',
         'text': text,
-        'timestamp': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'likes': 0,
+        'likedBy': [],
+        'replies': [],
       });
 
+      // Wait for server timestamp to resolve
       final comment = await commentRef.get();
+      final commentData = comment.data()!;
+      
+      // Update video comment count
+      await _firestore.runTransaction((transaction) async {
+        final videoRef = _firestore.collection('videos').doc(videoId);
+        final videoDoc = await transaction.get(videoRef);
+        
+        if (!videoDoc.exists) {
+          throw Exception('Video not found');
+        }
+
+        final currentComments = videoDoc.data()?['comments'] ?? 0;
+        transaction.update(videoRef, {
+          'comments': currentComments + 1,
+          'lastCommentAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      print('[VideoService] ✅ Comment added successfully');
       return {
         'id': comment.id,
-        ...comment.data()!,
+        ...commentData,
+        // Convert server timestamp to client timestamp for immediate display
+        'createdAt': (commentData['createdAt'] as Timestamp?) ?? Timestamp.now(),
       };
-    } catch (e) {
-      print('[VideoService] Error adding comment: $e');
+    } catch (e, stackTrace) {
+      print('[VideoService] ❌ Error adding comment:');
+      print('  - Error: $e');
+      print('  - Stack trace: $stackTrace');
       return null;
     }
   }
@@ -346,13 +482,26 @@ class VideoService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> loadMoreVideos() async {
+  Future<List<Map<String, dynamic>>> loadMoreVideos({
+    DocumentSnapshot? lastDocument,
+  }) async {
     try {
-      final snapshot = await _firestore
+      print('[VideoService] 📥 Loading more videos...');
+      print('  - Last document: ${lastDocument?.id}');
+
+      var query = _firestore
           .collection('videos')
           .orderBy('createdAt', descending: true)
-          .limit(10)
-          .get();
+          .limit(10);
+
+      // Add pagination if we have a last document
+      if (lastDocument != null) {
+        query = query.startAfterDocument(lastDocument);
+      }
+
+      final snapshot = await query.get();
+      
+      print('[VideoService] ✅ Loaded ${snapshot.docs.length} videos');
 
       return snapshot.docs
           .map((doc) => {
@@ -361,29 +510,87 @@ class VideoService {
               })
           .toList();
     } catch (e) {
-      print('[VideoService] Error loading more videos: $e');
+      print('[VideoService] ❌ Error loading more videos: $e');
       return [];
     }
   }
 
   Future<List<Map<String, dynamic>>> getDiscoverFeedVideos() async {
     try {
+      print('[VideoService] 🔍 Fetching discover feed videos...');
+      
+      // First get all active videos
       final snapshot = await _firestore
           .collection('videos')
           .where('status', isEqualTo: 'active')
-          .orderBy('views', descending: true)
-          .limit(20)
+          .limit(50)  // Increased limit since we'll filter some out
           .get();
 
-      return snapshot.docs
+      print('[VideoService] 📥 Retrieved ${snapshot.docs.length} videos from Firestore');
+      
+      final videos = snapshot.docs
           .map((doc) => {
                 'id': doc.id,
                 ...doc.data(),
               })
           .toList();
+
+      // Sort by views in memory
+      videos.sort((a, b) => (b['views'] ?? 0).compareTo(a['views'] ?? 0));
+
+      // Filter out videos with empty thumbnails
+      final validVideos = <Map<String, dynamic>>[];
+      for (final video in videos) {
+        final thumbnailUrl = video['thumbnailUrl'] as String? ?? '';
+        if (thumbnailUrl.isNotEmpty) {
+          try {
+            if (await _isValidUrl(thumbnailUrl)) {
+              validVideos.add(video);
+              if (validVideos.length >= 20) break; // Stop once we have enough valid videos
+            } else {
+              print('[VideoService] ⚠️ Invalid thumbnail URL found: $thumbnailUrl');
+              // Update the video status to indicate thumbnail issue
+              await _firestore
+                  .collection('videos')
+                  .doc(video['id'])
+                  .update({
+                    'status': 'thumbnail_error',
+                    'lastError': 'Invalid thumbnail URL',
+                    'lastErrorTimestamp': FieldValue.serverTimestamp(),
+                  });
+            }
+          } catch (e) {
+            print('[VideoService] ⚠️ Error validating thumbnail URL: $e');
+          }
+        }
+      }
+
+      print('[VideoService] ✅ Found ${validVideos.length} valid videos for discover feed');
+      return validVideos;
     } catch (e) {
-      print('[VideoService] Error getting discover feed videos: $e');
+      print('[VideoService] ❌ Error getting discover feed videos: $e');
       return [];
+    }
+  }
+
+  Future<bool> _isValidUrl(String url) async {
+    if (url.isEmpty) return false;
+    
+    try {
+      if (url.startsWith('http')) {
+        final uri = Uri.parse(url);
+        if (!uri.host.contains('firebasestorage.googleapis.com')) {
+          return false;
+        }
+        // Try to get the download URL to validate it exists
+        final ref = FirebaseStorage.instance.refFromURL(url);
+        await ref.getDownloadURL();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('[VideoService] URL validation failed: $e');
+      return false;
     }
   }
 

@@ -87,6 +87,10 @@ class SpoonSlashGame extends FlameGame with DragCallbacks, HasCollisionDetection
     print('[Game] Game Over! Final score: $score');
     gameState = GameState.gameOver;
     removeAll(children.whereType<FoodComponent>());
+    _swipePath.clear(); // Clear any remaining swipe trails
+    _spawnTimer = 0.0; // Reset spawn timer
+    onScoreChanged(score); // Final score update
+    _updateScoreDisplay(); // Update the display one last time
   }
 
   @override
@@ -142,6 +146,15 @@ class SpoonSlashGame extends FlameGame with DragCallbacks, HasCollisionDetection
           _swipeTimer = 0;
         }
       }
+
+      // Check if any food items are too far below the screen
+      final foodItems = children.whereType<FoodComponent>().toList();
+      for (final food in foodItems) {
+        if (food.position.y > size.y + 100 && !food.isSliced) { // Add buffer for off-screen items
+          food.removeFromParent();
+          onFoodMissed();
+        }
+      }
     }
   }
 
@@ -167,11 +180,11 @@ class SpoonSlashGame extends FlameGame with DragCallbacks, HasCollisionDetection
     
     print('[Game] Food missed! Lives remaining: ${lives - 1}');
     lives--;
+    _updateScoreDisplay(); // Update display to show new lives count
+    
     if (lives <= 0) {
       print('[Game] Game Over - Out of lives');
-      gameState = GameState.gameOver;  // Update the game state
-      onScoreChanged(score);  // Final score update
-      removeAll(children.whereType<FoodComponent>());  // Clear all food items
+      endGame(); // Call endGame instead of just setting state
     }
   }
 

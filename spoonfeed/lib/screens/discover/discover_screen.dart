@@ -33,16 +33,34 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   }
 
   Future<void> _loadVideos() async {
+    print('[DiscoverScreen] Starting to load videos...');
     setState(() => _isLoading = true);
 
     try {
+      print('[DiscoverScreen] Calling getDiscoverFeedVideos...');
       final docs = await _videoService.getDiscoverFeedVideos();
+      print('[DiscoverScreen] Received ${docs.length} videos from service');
+      
+      final videos = docs.map((doc) {
+        print('[DiscoverScreen] Processing video doc: ${doc['id']}');
+        print('[DiscoverScreen] - thumbnailUrl: ${doc['thumbnailUrl']}');
+        print('[DiscoverScreen] - status: ${doc['status']}');
+        return VideoModel.fromFirestore(doc);
+      }).toList();
+      
+      print('[DiscoverScreen] Converted ${videos.length} videos to models');
+      
       setState(() {
-        _videos.addAll(docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
+        _videos.clear(); // Clear existing videos before adding new ones
+        _videos.addAll(videos);
         _isLoading = false;
       });
-    } catch (e) {
-      print('Error loading discover videos: $e');
+      
+      print('[DiscoverScreen] Updated state with ${_videos.length} videos');
+    } catch (e, stackTrace) {
+      print('[DiscoverScreen] Error loading discover videos:');
+      print('Error: $e');
+      print('Stack trace: $stackTrace');
       setState(() => _isLoading = false);
     }
   }

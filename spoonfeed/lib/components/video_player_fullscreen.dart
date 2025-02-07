@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'dart:async';
 import '../models/video_model.dart';
 import '../services/video/video_service.dart';
 import 'comments_sheet.dart';
 import 'share_sheet.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
+import '../services/cookbook_service.dart';
+import 'package:provider/provider.dart';
+import '../models/cookbook_model.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class VideoPlayerFullscreen extends StatefulWidget {
   final VideoModel video;
@@ -46,11 +51,35 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   }
 
   Future<void> _initializeMetadata() async {
-    _likeCount = widget.video.likes;
-    _commentCount = widget.video.comments;
-    _shareCount = widget.video.shares;
-    _isLiked = await _videoService.isVideoLikedByUser(widget.video.id);
-    if (mounted) setState(() {});
+    try {
+      // Get the actual likes count from Firestore
+      final videoDoc = await FirebaseFirestore.instance
+          .collection('videos')
+          .doc(widget.video.id)
+          .get();
+      
+      if (videoDoc.exists) {
+        _likeCount = videoDoc.data()?['likes'] ?? 0;
+      } else {
+        _likeCount = 0;
+      }
+      
+      _commentCount = widget.video.comments;
+      _shareCount = widget.video.shares;
+      _isLiked = await _videoService.isVideoLikedByUser(widget.video.id);
+      
+      if (mounted) setState(() {});
+    } catch (e) {
+      print('[VideoPlayer] Error initializing metadata: $e');
+      // Fallback to video model data if Firestore fetch fails
+      if (mounted) {
+        setState(() {
+          _likeCount = widget.video.likes;
+          _commentCount = widget.video.comments;
+          _shareCount = widget.video.shares;
+        });
+      }
+    }
   }
 
   @override
@@ -75,51 +104,78 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     try {
       print('[VideoPlayer] Starting initialization for video: ${widget.video.id}');
       if (_controller != null) {
-        print('[VideoPlayer] Controller already exists, skipping initialization');
+        print('[VideoPlayer] Controller already exists, checking state...');
+        if (!_controller!.value.isInitialized) {
+          print('[VideoPlayer] Existing controller not initialized, reinitializing...');
+          await _controller!.dispose();
+          _controller = null;
+        } else {
+          print('[VideoPlayer] Using existing initialized controller');
+          return;
+        }
+      }
+
+      // Check if we should initialize now
+      if (!widget.isActive && !widget.shouldPreload) {
+        print('[VideoPlayer] Skipping initialization - video not active or preloading');
         return;
       }
 
-      final videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
-      print('[VideoPlayer] Retrieved video URL: $videoUrl');
+      print('[VideoPlayer] Fetching video URL...');
+      String? videoUrl;
       
-      if (videoUrl == null) {
-        print('[VideoPlayer] Failed to get video URL');
-        setState(() => _isInitialized = false);
-        return;
+      // First try to get from cache
+      final cachedPath = await _videoService.getCachedVideoPath(widget.video.videoUrl);
+      if (cachedPath != null && await File(cachedPath).exists()) {
+        print('[VideoPlayer] Using cached video: $cachedPath');
+        _controller = VideoPlayerController.file(
+          File(cachedPath),
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+        );
+      } else {
+        // Fallback to network URL
+        videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
+        if (videoUrl == null) {
+          print('[VideoPlayer] Failed to get video URL');
+          setState(() => _isInitialized = false);
+          return;
+        }
+
+        print('[VideoPlayer] Using network URL: $videoUrl');
+        _controller = VideoPlayerController.networkUrl(
+          Uri.parse(videoUrl),
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+        );
       }
 
-      print('[VideoPlayer] Creating controller for ${kIsWeb ? 'web' : 'file'} playback');
-      
-      // Always use network URL for video playback
-      _controller = VideoPlayerController.networkUrl(
-        Uri.parse(videoUrl),
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      );
+      // Add listeners before initialization
+      _controller!.addListener(_onControllerUpdate);
 
       print('[VideoPlayer] Initializing controller');
-      await _controller?.initialize();
+      await _controller?.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          print('[VideoPlayer] Initialization timeout');
+          throw TimeoutException('Video initialization timed out');
+        },
+      );
       
       final value = _controller?.value;
       print('[VideoPlayer] Controller initialized:');
       print('[VideoPlayer] - Video size: ${value?.size}');
       print('[VideoPlayer] - Duration: ${value?.duration}');
       print('[VideoPlayer] - Is playing: ${value?.isPlaying}');
-      print('[VideoPlayer] - Position: ${value?.position}');
-      print('[VideoPlayer] - Buffered: ${value?.buffered}');
       
       await _controller?.setLooping(true);
-      print('[VideoPlayer] Looping enabled');
       
       if (widget.isActive) {
         print('[VideoPlayer] Video is active, starting playback');
-        _controller?.setVolume(1.0);
-        _controller?.play();
+        await _controller?.setVolume(1.0);
+        await _controller?.play();
       } else if (widget.shouldPreload) {
         print('[VideoPlayer] Preloading video without playback');
         await _controller?.setVolume(0);
-        // Preload a small portion of the video
-        await _controller?.seekTo(const Duration(milliseconds: 500));
-        await _controller?.seekTo(Duration.zero);
+        // Just initialize without playing
       }
 
       if (mounted) {
@@ -127,8 +183,6 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
           _isInitialized = true;
           print('[VideoPlayer] State updated: initialized = true');
         });
-      } else {
-        print('[VideoPlayer] Widget not mounted after initialization');
       }
     } catch (e, stackTrace) {
       print('[VideoPlayer] Error initializing video:');
@@ -136,21 +190,47 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       print('[VideoPlayer] Stack trace: $stackTrace');
       
       // Cleanup on error
-      await _controller?.dispose();
-      _controller = null;
+      await _cleanupController();
       
       if (mounted) {
-        setState(() {
-          _isInitialized = false;
-          print('[VideoPlayer] State updated: initialized = false due to error');
-        });
+        setState(() => _isInitialized = false);
+        
+        // Show error to user
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error playing video: ${e.toString()}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
       }
+    }
+  }
+
+  void _onControllerUpdate() {
+    if (_controller == null || !mounted) return;
+    
+    // Handle playback errors
+    if (_controller!.value.hasError) {
+      print('[VideoPlayer] Playback error: ${_controller!.value.errorDescription}');
+      _cleanupController();
+      // Retry initialization after error
+      _initializeVideo();
+    }
+  }
+
+  Future<void> _cleanupController() async {
+    final oldController = _controller;
+    _controller = null;
+    try {
+      await oldController?.dispose();
+    } catch (e) {
+      print('[VideoPlayer] Error disposing controller: $e');
     }
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    _cleanupController();
     super.dispose();
   }
 
@@ -165,7 +245,10 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     });
   }
 
-  void _handleLike() {
+  void _handleLike() async {
+    final previousLikeState = _isLiked;
+    final previousCount = _likeCount;
+    
     // Optimistically update UI
     setState(() {
       if (_isLiked) {
@@ -176,8 +259,31 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       _isLiked = !_isLiked;
     });
 
-    // Update backend
-    _videoService.likeVideo(widget.video.id, !_isLiked);
+    try {
+      // Update backend
+      await _videoService.likeVideo(widget.video.id, _isLiked);
+      
+      // Refresh the actual count from Firestore
+      final videoDoc = await FirebaseFirestore.instance
+          .collection('videos')
+          .doc(widget.video.id)
+          .get();
+      
+      if (mounted && videoDoc.exists) {
+        setState(() {
+          _likeCount = videoDoc.data()?['likes'] ?? 0;
+        });
+      }
+    } catch (e) {
+      print('[VideoPlayer] Error handling like: $e');
+      // Revert on error
+      if (mounted) {
+        setState(() {
+          _isLiked = previousLikeState;
+          _likeCount = previousCount;
+        });
+      }
+    }
   }
 
   void _showComments() {
@@ -202,14 +308,10 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     );
   }
 
-  void _showShareSheet() {
+  void _showShareSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (context) => ShareSheet(
         video: widget.video,
         videoService: _videoService,
@@ -220,157 +322,297 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     );
   }
 
+  void _showBookmarkDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) {
+          final cookbookService = Provider.of<CookbookService>(context);
+          
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Save to Cookbook',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add),
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        final nameController = TextEditingController();
+                        final descriptionController = TextEditingController();
+
+                        final created = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Create New Cookbook'),
+                            content: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextField(
+                                  controller: nameController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Name',
+                                    hintText: 'Enter cookbook name',
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                TextField(
+                                  controller: descriptionController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Description (optional)',
+                                    hintText: 'Enter cookbook description',
+                                  ),
+                                  maxLines: 2,
+                                ),
+                              ],
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () async {
+                                  final name = nameController.text.trim();
+                                  if (name.isEmpty) return;
+
+                                  final cookbook = await cookbookService.createCookbook(
+                                    name: name,
+                                    description: descriptionController.text.trim(),
+                                  );
+
+                                  if (cookbook != null && context.mounted) {
+                                    Navigator.pop(context, true);
+                                  }
+                                },
+                                child: const Text('Create'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (created == true && context.mounted) {
+                          _showBookmarkDialog();
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: StreamBuilder<List<CookbookModel>>(
+                  stream: cookbookService.getUserCookbooks(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Error: ${snapshot.error}'));
+                    }
+
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final cookbooks = snapshot.data!;
+                    if (cookbooks.isEmpty) {
+                      return const Center(
+                        child: Text('No cookbooks yet. Create one to save videos.'),
+                      );
+                    }
+
+                    return ListView.builder(
+                      controller: scrollController,
+                      itemCount: cookbooks.length,
+                      itemBuilder: (context, index) {
+                        final cookbook = cookbooks[index];
+                        return ListTile(
+                          title: Text(cookbook.name),
+                          subtitle: Text(
+                            '${cookbook.videoCount} videos',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          onTap: () async {
+                            final added = await cookbookService.addVideoToCookbook(
+                              cookbook.id,
+                              widget.video,
+                            );
+                            if (added && context.mounted) {
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Added to ${cookbook.name}',
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    print('[VideoPlayer] Building video player for ${widget.video.id}');
-    print('[VideoPlayer] Game mode: ${widget.isGameMode}');
-    
-    return Container(
-      width: MediaQuery.of(context).size.width,
-      height: MediaQuery.of(context).size.height,
-      color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Video player
-          _controller != null && _controller!.value.isInitialized
-              ? GestureDetector(
-                  onTap: _togglePlayPause,
-                  child: Container(
-                    color: Colors.black,
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: _controller!.value.size.width,
-                        height: _controller!.value.size.height,
-                        child: AspectRatio(
-                          aspectRatio: _controller!.value.aspectRatio,
-                          child: VideoPlayer(_controller!),
-                        ),
-                      ),
-                    ),
-                  ),
-                )
-              : const Center(child: CircularProgressIndicator()),
-
-          // Video controls overlay - Adjust position based on game mode
-          Positioned(
-            right: 8,
-            bottom: widget.isGameMode ? 16 : kBottomNavigationBarHeight + 16,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _ActionButton(
-                  icon: _isLiked ? Icons.favorite : Icons.favorite_border,
-                  iconColor: _isLiked ? Colors.red : Colors.white,
-                  label: _likeCount.toString(),
-                  onTap: _handleLike,
-                ),
-                const SizedBox(height: 16),
-                _ActionButton(
-                  icon: Icons.comment,
-                  label: _commentCount.toString(),
-                  onTap: _showComments,
-                ),
-                const SizedBox(height: 16),
-                _ActionButton(
-                  icon: Icons.share,
-                  label: _shareCount.toString(),
-                  onTap: _showShareSheet,
-                ),
-              ],
-            ),
+    super.build(context);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Video player
+        GestureDetector(
+          onTap: _togglePlayPause,
+          child: Container(
+            color: Colors.black,
+            child: _isInitialized && _controller != null
+                ? AspectRatio(
+                    aspectRatio: _controller!.value.aspectRatio,
+                    child: VideoPlayer(_controller!),
+                  )
+                : const Center(child: CircularProgressIndicator()),
           ),
+        ),
 
-          // Video info overlay at bottom - Adjust position based on game mode
-          Positioned(
-            left: 8,
-            right: 72,
-            bottom: widget.isGameMode ? 16 : kBottomNavigationBarHeight + 16,
+        // Video info overlay at bottom
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: widget.isGameMode 
+              ? MediaQuery.of(context).size.height * 0.5 + 16 // When game is active, position above game
+              : 16, // Just above navigation bar
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [
+                  Colors.black.withOpacity(0.7),
+                  Colors.transparent,
+                ],
+                stops: const [0.0, 1.0],
+              ),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Title and description
                 Text(
                   widget.video.title,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 16,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                     shadows: [
                       Shadow(
-                        blurRadius: 4.0,
+                        blurRadius: 4,
                         color: Colors.black,
-                        offset: Offset(1.0, 1.0),
+                        offset: Offset(1, 1),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  widget.video.description,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 4.0,
-                        color: Colors.black,
-                        offset: Offset(1.0, 1.0),
-                      ),
-                    ],
+                if (widget.video.description.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.video.description,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      shadows: [
+                        Shadow(
+                          blurRadius: 4,
+                          color: Colors.black,
+                          offset: Offset(1, 1),
+                        ),
+                      ],
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: widget.isGameMode ? 1 : 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                ],
               ],
             ),
           ),
-        ],
-      ),
+        ),
+
+        // Interaction buttons on the right
+        Positioned(
+          right: 16,
+          bottom: widget.isGameMode 
+              ? MediaQuery.of(context).size.height * 0.5 + 16 // When game is active, position above game
+              : MediaQuery.of(context).size.height * 0.15, // Adjusted to be closer to the bottom
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildInteractionButton(
+                icon: _isLiked ? Icons.favorite : Icons.favorite_border,
+                label: _likeCount.toString(),
+                color: _isLiked ? Colors.red : Colors.white,
+                onTap: _handleLike,
+              ),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: Icons.comment,
+                label: _commentCount.toString(),
+                onTap: _showComments,
+              ),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: Icons.bookmark_border,
+                label: 'Save',
+                onTap: _showBookmarkDialog,
+              ),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: Icons.share,
+                label: _shareCount.toString(),
+                onTap: () => _showShareSheet(context),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
-}
 
-class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final Color? iconColor;
-
-  const _ActionButton({
-    Key? key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.iconColor,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildInteractionButton({
+    required IconData icon,
+    required String label,
+    Color color = Colors.white,
+    required VoidCallback onTap,
+  }) {
     return GestureDetector(
       onTap: onTap,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: const BoxDecoration(
-              color: Colors.black54,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              icon,
-              color: iconColor ?? Colors.white,
-              size: 28,
-            ),
-          ),
+          Icon(icon, color: color, size: 30),
           const SizedBox(height: 4),
           Text(
             label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-            ),
+            style: TextStyle(color: color, fontSize: 14),
           ),
         ],
       ),

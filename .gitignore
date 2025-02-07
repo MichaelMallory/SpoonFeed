@@ -87,4 +87,19 @@ build/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# Android Studio installer
+*.tar.gz
+android-studio*
+
+# Video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+
+# Temporary video files
+**/video_compress/
+**/cache/ 

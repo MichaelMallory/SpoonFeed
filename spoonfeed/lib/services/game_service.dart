@@ -14,11 +14,9 @@ class GameService extends ChangeNotifier {
   int _currentScore = 0;
   int _highScore = 0;
   int _lives = 3;
+  bool _isGameInProgress = false;
 
-  bool get isGameModeActive {
-    print('[GameService] Game mode active: $_isGameModeActive');
-    return _isGameModeActive;
-  }
+  bool get isGameModeActive => _isGameModeActive;
   int get currentScore => _currentScore;
   int get highScore => _highScore;
   int get lives => _lives;
@@ -34,7 +32,60 @@ class GameService extends ChangeNotifier {
     if (_lives > 0) {
       _lives--;
       notifyListeners();
+
+      // If no lives left, end the game
+      if (_lives <= 0) {
+        _endGame();
+      }
     }
+  }
+
+  // Start a new game
+  void startGame() {
+    print('[GameService] Starting new game');
+    _isGameInProgress = true;
+    _currentScore = 0;
+    _lives = 3;
+    notifyListeners();
+  }
+
+  // End the current game and update stats
+  Future<void> _endGame() async {
+    print('[GameService] Ending game with score: $_currentScore');
+    if (!_isGameInProgress) return; // Don't end if no game in progress
+    
+    _isGameInProgress = false;
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    try {
+      // Update game statistics in Firestore
+      await _scores.doc(user.uid).set({
+        'userId': user.uid,
+        'highScore': _currentScore > _highScore ? _currentScore : _highScore,
+        'lastScore': _currentScore,
+        'lastPlayed': FieldValue.serverTimestamp(),
+        'gamesPlayed': FieldValue.increment(1),
+        'totalScore': FieldValue.increment(_currentScore),
+        'lastUpdated': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (_currentScore > _highScore) {
+        _highScore = _currentScore;
+        notifyListeners();
+      }
+    } catch (e) {
+      print('[GameService] Error updating game stats: $e');
+    }
+  }
+
+  // Update current game score
+  Future<void> updateScore(int score) async {
+    if (!_isGameModeActive || !_isGameInProgress) return;
+    
+    print('[GameService] Updating score: $score');
+    _currentScore = score;
+    notifyListeners();
   }
 
   // Get current user's game score
@@ -42,63 +93,60 @@ class GameService extends ChangeNotifier {
     final user = _auth.currentUser;
     if (user == null) return null;
 
-    final doc = await _scores.doc(user.uid).get();
-    if (!doc.exists) return null;
-
-    return GameScoreModel.fromFirestore(doc);
-  }
-
-  // Update user's game score
-  Future<void> updateScore(int score) async {
-    if (!_isGameModeActive) return; // Don't update score if game mode is not active
-    
-    _currentScore = score;
-    if (score > _highScore) {
-      _highScore = score;
-      notifyListeners(); // Notify listeners when high score changes
-    }
-
-    final user = _auth.currentUser;
-    if (user == null) return;
-
     try {
-      // Update high score in Firestore
-      await _scores.doc(user.uid).set({
-        'userId': user.uid,
-        'highScore': _highScore,
-        'lastPlayed': DateTime.now(),
-        'gamesPlayed': FieldValue.increment(1),
-        'lastUpdated': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      final doc = await _scores.doc(user.uid).get();
+      if (!doc.exists) {
+        // Initialize user's game stats if they don't exist
+        await _scores.doc(user.uid).set({
+          'userId': user.uid,
+          'highScore': 0,
+          'lastScore': 0,
+          'gamesPlayed': 0,
+          'totalScore': 0,
+          'lastPlayed': FieldValue.serverTimestamp(),
+          'lastUpdated': FieldValue.serverTimestamp(),
+        });
+        return GameScoreModel(
+          userId: user.uid,
+          highScore: 0,
+          gamesPlayed: 0,
+          lastPlayed: DateTime.now(),
+        );
+      }
+      return GameScoreModel.fromFirestore(doc);
     } catch (e) {
-      print('Error updating score: $e');
+      print('[GameService] Error getting user score: $e');
+      return null;
     }
-  }
-
-  // Get user's high score
-  Future<int> getHighScore() async {
-    return _highScore;
-  }
-
-  // Get top scores
-  Future<List<GameScoreModel>> getTopScores({int limit = 10}) async {
-    final snapshot = await _scores
-        .orderBy('highScore', descending: true)
-        .limit(limit)
-        .get();
-
-    return snapshot.docs
-        .map((doc) => GameScoreModel.fromFirestore(doc))
-        .toList();
   }
 
   void toggleGameMode() {
     _isGameModeActive = !_isGameModeActive;
-    if (!_isGameModeActive) {
-      // Reset score when game mode is disabled
-      _currentScore = 0;
+    if (!_isGameModeActive && _isGameInProgress) {
+      // End current game if game mode is disabled during gameplay
+      _endGame();
+    } else if (_isGameModeActive) {
+      // Start new game when game mode is enabled
+      startGame();
     }
-    print('Game mode toggled: $_isGameModeActive'); // Debug log
+    print('[GameService] Game mode toggled: $_isGameModeActive');
     notifyListeners();
+  }
+
+  // Get top scores
+  Future<List<GameScoreModel>> getTopScores({int limit = 10}) async {
+    try {
+      final snapshot = await _scores
+          .orderBy('highScore', descending: true)
+          .limit(limit)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => GameScoreModel.fromFirestore(doc))
+          .toList();
+    } catch (e) {
+      print('[GameService] Error getting top scores: $e');
+      return [];
+    }
   }
 } 
