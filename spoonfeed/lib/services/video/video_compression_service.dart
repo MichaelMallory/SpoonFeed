@@ -101,7 +101,8 @@ class VideoCompressionService {
 
       // Always compress if resolution is high, regardless of file size
       final shouldCompress = inputSize >= _compressionThreshold || 
-                           (info.width != null && info.width! > 1080);
+                           (info.width != null && info.width! > 720) ||  // Lower threshold for compression
+                           (info.height != null && info.height! > 1280); // Also check height
 
       if (!shouldCompress) {
         print('[VideoCompressionService] ℹ️ File is under compression threshold and has acceptable resolution');
@@ -123,17 +124,24 @@ class VideoCompressionService {
       // Set the output path in our processing directory
       final outputPath = '${processingDir.path}/compressed_${DateTime.now().millisecondsSinceEpoch}$extension';
       
-      // Determine quality based on resolution and file size
-      VideoQuality quality;
-      if (info.width! > 1920 || inputSize > 50 * 1024 * 1024) {
-        quality = VideoQuality.MediumQuality;
-      } else if (info.width! > 1080 || inputSize > 20 * 1024 * 1024) {
-        quality = VideoQuality.DefaultQuality;
-      } else {
-        quality = VideoQuality.HighestQuality;
+      // Use more conservative quality settings for better device compatibility
+      VideoQuality quality = VideoQuality.MediumQuality; // Default to medium quality
+      int targetFrameRate = 30;
+      int maxWidth = 720;  // Max width for all videos
+      int maxHeight = 1280; // Max height for all videos
+      
+      // If the video is very high resolution or large size, use lower quality
+      if (info.width! > 1080 || info.height! > 1920 || inputSize > 30 * 1024 * 1024) {
+        quality = VideoQuality.LowQuality;
+        targetFrameRate = 24;
+        maxWidth = 540;    // Even lower resolution for very large videos
+        maxHeight = 960;
       }
       
-      print('[VideoCompressionService] Using quality setting: $quality');
+      print('[VideoCompressionService] Compression settings:');
+      print('  - Quality: $quality');
+      print('  - Frame rate: $targetFrameRate');
+      print('  - Max dimensions: ${maxWidth}x${maxHeight}');
       
       // Try compression with shorter timeout
       final result = await VideoCompress.compressVideo(
@@ -141,7 +149,7 @@ class VideoCompressionService {
         quality: quality,
         deleteOrigin: false,
         includeAudio: true,
-        frameRate: 30,
+        frameRate: targetFrameRate,
       ).timeout(
         const Duration(seconds: 45),  // Much shorter timeout - fail fast if not working
         onTimeout: () {

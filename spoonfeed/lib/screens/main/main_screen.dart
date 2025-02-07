@@ -4,6 +4,7 @@ import '../feed/feed_screen.dart';
 import '../discover/discover_screen.dart';
 import '../upload/upload_screen.dart';
 import '../profile/profile_screen.dart';
+import '../cookbook/cookbook_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -25,7 +26,7 @@ class _MainScreenState extends State<MainScreen> {
       const FeedScreen(),
       const DiscoverScreen(),
       const UploadScreen(),
-      const Center(child: Text('Inbox')),
+      const CookbookScreen(),
       ProfileScreen(userId: _auth.currentUser?.uid ?? ''),
     ];
   }
@@ -91,6 +92,8 @@ class _MainScreenState extends State<MainScreen> {
           selectedFontSize: 10,
           unselectedFontSize: 10,
           iconSize: 24,
+          currentIndex: _selectedIndex,
+          onTap: _onItemTapped,
           items: const <BottomNavigationBarItem>[
             BottomNavigationBarItem(
               icon: Icon(Icons.home),
@@ -101,20 +104,18 @@ class _MainScreenState extends State<MainScreen> {
               label: 'Discover',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.add_box),
+              icon: Icon(Icons.add_circle_outline),
               label: 'Upload',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.inbox),
-              label: 'Inbox',
+              icon: Icon(Icons.book),
+              label: 'Cookbook',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person),
               label: 'Profile',
             ),
           ],
-          currentIndex: _selectedIndex,
-          onTap: _onItemTapped,
         ),
       ),
     );

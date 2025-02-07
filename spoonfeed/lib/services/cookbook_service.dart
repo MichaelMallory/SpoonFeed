@@ -54,6 +54,19 @@ class CookbookService {
     if (user == null) return false;
 
     try {
+      // Check if video already exists in cookbook
+      final existingVideo = await _firestore
+          .collection('cookbooks')
+          .doc(cookbookId)
+          .collection('videos')
+          .doc(video.id)
+          .get();
+
+      if (existingVideo.exists) {
+        print('[CookbookService] Video already exists in cookbook');
+        return false;
+      }
+
       final batch = _firestore.batch();
       
       // Add video reference to cookbook

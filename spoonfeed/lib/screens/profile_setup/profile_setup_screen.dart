@@ -3,7 +3,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/auth_service.dart';
 
 class ProfileSetupScreen extends StatefulWidget {
-  const ProfileSetupScreen({super.key});
+  final bool isInitialSetup;
+  
+  const ProfileSetupScreen({
+    super.key,
+    this.isInitialSetup = false,
+  });
 
   @override
   State<ProfileSetupScreen> createState() => _ProfileSetupScreenState();
@@ -32,13 +37,16 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         return;
       }
 
-      final userData = await _authService.getUserData(user.uid);
-      if (mounted && userData != null) {
-        setState(() {
-          _displayNameController.text = userData.displayName ?? user.displayName ?? '';
-          _bioController.text = userData.bio ?? '';
-          _isChef = userData.isChef;
-        });
+      // Only load existing data if not initial setup
+      if (!widget.isInitialSetup) {
+        final userData = await _authService.getUserData(user.uid);
+        if (mounted && userData != null) {
+          setState(() {
+            _displayNameController.text = userData.displayName ?? user.displayName ?? '';
+            _bioController.text = userData.bio ?? '';
+            _isChef = userData.isChef;
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -65,13 +73,9 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     });
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw Exception('No user signed in');
+      final user = _authService.currentUser;
+      if (user == null) throw Exception('No user found');
 
-      // Update Firebase Auth display name
-      await user.updateDisplayName(_displayNameController.text.trim());
-
-      // Update Firestore user data
       await _authService.updateUserData(user.uid, {
         'displayName': _displayNameController.text.trim(),
         'bio': _bioController.text.trim(),
@@ -80,7 +84,14 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       });
 
       if (!mounted) return;
-      Navigator.of(context).pop(true); // Return true to indicate success
+      
+      if (widget.isInitialSetup) {
+        // For initial setup, go to main screen and clear navigation stack
+        Navigator.of(context).pushNamedAndRemoveUntil('/main', (route) => false);
+      } else {
+        // For profile edit, just pop back with success result
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       setState(() {
         _errorMessage = e.toString();
@@ -98,7 +109,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Edit Profile'),
+        title: Text(widget.isInitialSetup ? 'Complete Your Profile' : 'Edit Profile'),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
@@ -172,7 +183,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                           strokeWidth: 2,
                         ),
                       )
-                    : const Text('Save Profile'),
+                    : Text(widget.isInitialSetup ? 'Complete Setup' : 'Save Profile'),
               ),
             ],
           ),

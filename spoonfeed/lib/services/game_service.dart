@@ -72,8 +72,9 @@ class GameService extends ChangeNotifier {
 
       if (_currentScore > _highScore) {
         _highScore = _currentScore;
-        notifyListeners();
       }
+      
+      notifyListeners();
     } catch (e) {
       print('[GameService] Error updating game stats: $e');
     }
@@ -85,6 +86,28 @@ class GameService extends ChangeNotifier {
     
     print('[GameService] Updating score: $score');
     _currentScore = score;
+    
+    // Check if this is a new high score
+    if (_currentScore > _highScore) {
+      _highScore = _currentScore;
+      
+      // Update high score in Firestore
+      final user = _auth.currentUser;
+      if (user != null) {
+        try {
+          await _scores.doc(user.uid).set({
+            'userId': user.uid,
+            'highScore': _highScore,
+            'lastScore': _currentScore,
+            'lastPlayed': FieldValue.serverTimestamp(),
+            'lastUpdated': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        } catch (e) {
+          print('[GameService] Error updating high score: $e');
+        }
+      }
+    }
+    
     notifyListeners();
   }
 

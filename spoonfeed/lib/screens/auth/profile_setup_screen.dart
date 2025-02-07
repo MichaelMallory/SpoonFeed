@@ -45,7 +45,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       });
 
       if (!mounted) return;
-      Navigator.of(context).pushReplacementNamed('/home');
+      Navigator.of(context).pushNamedAndRemoveUntil('/main', (route) => false);
     } catch (e) {
       setState(() {
         _errorMessage = e.toString();

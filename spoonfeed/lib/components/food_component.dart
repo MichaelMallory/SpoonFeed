@@ -93,9 +93,6 @@ class FoodComponent extends PositionComponent with HasGameRef<SpoonSlashGame> {
       
       // Check if off screen
       if (position.y > gameRef.size.y + 100) {
-        if (!_isSliced) {
-          gameRef.onFoodMissed();  // Notify game directly
-        }
         removeFromParent();
       }
     } else {
@@ -194,8 +191,6 @@ class FoodComponent extends PositionComponent with HasGameRef<SpoonSlashGame> {
       
       particleSystem.position = position + size / 2;
       parent?.add(particleSystem);
-      
-      gameRef.updateScore(1);
     }
   }
 } 

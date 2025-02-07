@@ -236,11 +236,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             scrollDirection: Axis.vertical,
             controller: _pageController,
             itemCount: _videos.length,
-            onPageChanged: (index) => setState(() => _currentVideoIndex = index),
+            onPageChanged: (index) {
+              setState(() => _currentVideoIndex = index);
+              // Ensure the PageController is at the correct position
+              if (_pageController.page?.round() != index) {
+                _pageController.jumpToPage(index);
+              }
+            },
             itemBuilder: (context, index) {
               final video = _videos[index];
               return VideoPlayerFullscreen(
-                key: ValueKey(video.id),
+                key: ValueKey('fullscreen-${video.id}-$index'),
                 video: video,
                 isActive: index == _currentVideoIndex,
                 shouldPreload: index == _currentVideoIndex + 1 || index == _currentVideoIndex - 1,
@@ -264,6 +270,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     if (_isFullScreenMode) {
+      // Ensure the PageController is at the correct position when entering fullscreen
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pageController.hasClients && _pageController.page?.round() != _currentVideoIndex) {
+          _pageController.jumpToPage(_currentVideoIndex);
+        }
+      });
       return _buildFullScreenVideos();
     }
 

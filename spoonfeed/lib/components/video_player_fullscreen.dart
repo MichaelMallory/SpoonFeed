@@ -38,15 +38,48 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   int _likeCount = 0;
   int _commentCount = 0;
   int _shareCount = 0;
+  bool _hasError = false;
+  bool _isCancelled = false;  // Flag to track cancellation state
+  static int _activeControllers = 0;  // Static counter for active controllers
 
   @override
   bool get wantKeepAlive => widget.isActive || widget.shouldPreload;
 
+  void _incrementControllerCount() {
+    _activeControllers++;
+    print('\n[VideoPlayer] 📈 Controller counter incremented:');
+    print('  - Video ID: ${widget.video.id}');
+    print('  - New total: $_activeControllers');
+    print('  - Is mounted: $mounted');
+    print('  - Is active: ${widget.isActive}');
+  }
+
+  void _decrementControllerCount() {
+    _activeControllers--;
+    print('\n[VideoPlayer] 📉 Controller counter decremented:');
+    print('  - Video ID: ${widget.video.id}');
+    print('  - New total: $_activeControllers');
+    print('  - Is mounted: $mounted');
+    
+    // Safety check for negative values
+    if (_activeControllers < 0) {
+      print('  ⚠️ Counter went negative, resetting to 0');
+      _activeControllers = 0;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    print('Initializing video player for: ${widget.video.title}');
-    _initializeVideo();
+    print('\n[VideoPlayer] 🎬 INIT STATE for video: ${widget.video.id}');
+    print('  - Active: ${widget.isActive}');
+    print('  - Preload: ${widget.shouldPreload}');
+    print('  - Total controllers: $_activeControllers');
+    print('  - Is mounted: $mounted');
+    _isCancelled = false;  // Reset cancelled state on init
+    if (widget.isActive) {
+      _initializeVideo();
+    }
     _initializeMetadata();
   }
 
@@ -83,125 +116,223 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   }
 
   @override
+  void deactivate() {
+    print('\n[VideoPlayer] 🔌 DEACTIVATE for video: ${widget.video.id}');
+    print('  - Screen transition or widget tree change detected');
+    print('  - Has controller: ${_controller != null}');
+    print('  - Controller initialized: ${_controller?.value.isInitialized}');
+    print('  - Total active controllers: $_activeControllers');
+    print('  - Is cancelled: $_isCancelled');
+    _isCancelled = true;
+    _cleanupController(isTransition: true);
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
+    print('\n[VideoPlayer] 🗑️ DISPOSE for video: ${widget.video.id}');
+    print('  - Final cleanup before widget destruction');
+    print('  - Has controller: ${_controller != null}');
+    print('  - Controller initialized: ${_controller?.value.isInitialized}');
+    print('  - Total active controllers: $_activeControllers');
+    print('  - Is cancelled: $_isCancelled');
+    _isCancelled = true;
+    _cleanupController(isTransition: true);
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(VideoPlayerFullscreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    
+    // Reset cancelled state when video becomes active
+    if (!oldWidget.isActive && widget.isActive) {
+      print('\n[VideoPlayer] 🔄 Video becoming active: ${widget.video.id}');
+      print('  - Previous active state: ${oldWidget.isActive}');
+      print('  - New active state: ${widget.isActive}');
+      print('  - Current controllers: $_activeControllers');
+      _isCancelled = false;
+    }
+    
     if (widget.isActive != oldWidget.isActive) {
-      print('Video active state changed: ${widget.isActive}');
+      print('\n[VideoPlayer] 🔄 Video active state changed:');
+      print('  - Video ID: ${widget.video.id}');
+      print('  - Previous state: ${oldWidget.isActive}');
+      print('  - New state: ${widget.isActive}');
+      print('  - Controller exists: ${_controller != null}');
+      print('  - Controller initialized: ${_controller?.value.isInitialized}');
+      print('  - Total active controllers: $_activeControllers');
+      print('  - Is cancelled: $_isCancelled');
+      
       if (widget.isActive) {
-        _controller?.setVolume(1.0);
-        _controller?.play();
-      } else {
-        _controller?.pause();
-        if (!widget.shouldPreload) {
-          _controller?.setVolume(0);
-          _controller?.seekTo(Duration.zero);
+        if (_controller == null || !_isInitialized) {
+          print('  - Initializing previously inactive video');
+          _initializeVideo();
+        } else {
+          print('  - Resuming existing controller');
+          _controller?.setVolume(1.0);
+          _controller?.play();
         }
+      } else {
+        _isCancelled = true;
+        _controller?.pause();
+        print('  - Video inactive, cleaning up');
+        _cleanupController();
       }
     }
   }
 
   Future<void> _initializeVideo() async {
+    if (_isCancelled) {
+      print('\n[VideoPlayer] ⚠️ Initialization cancelled:');
+      print('  - Video ID: ${widget.video.id}');
+      print('  - Is mounted: $mounted');
+      print('  - Is active: ${widget.isActive}');
+      return;
+    }
+    
     try {
-      print('[VideoPlayer] Starting initialization for video: ${widget.video.id}');
+      print('\n[VideoPlayer] 🔄 Starting initialization:');
+      print('  - Video ID: ${widget.video.id}');
+      print('  - Memory status:');
+      print('    • Active controller: ${_controller != null}');
+      print('    • Controller initialized: ${_controller?.value.isInitialized}');
+      print('    • Is mounted: $mounted');
+      print('    • Total active controllers: $_activeControllers');
+      print('    • Is cancelled: $_isCancelled');
+      print('    • Is active: ${widget.isActive}');
+      
+      // Only cleanup if we don't already have an initialized controller
       if (_controller != null) {
-        print('[VideoPlayer] Controller already exists, checking state...');
-        if (!_controller!.value.isInitialized) {
-          print('[VideoPlayer] Existing controller not initialized, reinitializing...');
-          await _controller!.dispose();
-          _controller = null;
-        } else {
-          print('[VideoPlayer] Using existing initialized controller');
-          return;
-        }
+        print('  - Cleaning up existing controller first');
+        await _cleanupController();
       }
 
-      // Check if we should initialize now
-      if (!widget.isActive && !widget.shouldPreload) {
-        print('[VideoPlayer] Skipping initialization - video not active or preloading');
+      // Double check mount and active state
+      if (!mounted || !widget.isActive || _isCancelled) {
+        print('\n[VideoPlayer] ⚠️ Initialization aborted:');
+        print('  - Is mounted: $mounted');
+        print('  - Is active: ${widget.isActive}');
+        print('  - Is cancelled: $_isCancelled');
         return;
       }
 
-      print('[VideoPlayer] Fetching video URL...');
+      _incrementControllerCount();
+
+      print('\n[VideoPlayer] 🔍 Fetching video URL...');
       String? videoUrl;
       
       // First try to get from cache
       final cachedPath = await _videoService.getCachedVideoPath(widget.video.videoUrl);
       if (cachedPath != null && await File(cachedPath).exists()) {
-        print('[VideoPlayer] Using cached video: $cachedPath');
+        print('  ✅ Using cached video:');
+        print('    - Path: $cachedPath');
+        final cacheFile = File(cachedPath);
+        print('    - Size: ${_formatFileSize(await cacheFile.length())}');
         _controller = VideoPlayerController.file(
-          File(cachedPath),
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+          cacheFile,
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: true,
+          ),
         );
       } else {
-        // Fallback to network URL
+        print('  ⚠️ Cache miss, fetching network URL');
         videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
         if (videoUrl == null) {
-          print('[VideoPlayer] Failed to get video URL');
+          print('  ❌ Failed to get video URL');
+          _decrementControllerCount();
           setState(() => _isInitialized = false);
           return;
         }
 
-        print('[VideoPlayer] Using network URL: $videoUrl');
+        print('  🌐 Using network URL: $videoUrl');
         _controller = VideoPlayerController.networkUrl(
           Uri.parse(videoUrl),
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: true,
+          ),
         );
       }
 
       // Add listeners before initialization
       _controller!.addListener(_onControllerUpdate);
 
-      print('[VideoPlayer] Initializing controller');
-      await _controller?.initialize().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          print('[VideoPlayer] Initialization timeout');
-          throw TimeoutException('Video initialization timed out');
-        },
-      );
-      
-      final value = _controller?.value;
-      print('[VideoPlayer] Controller initialized:');
-      print('[VideoPlayer] - Video size: ${value?.size}');
-      print('[VideoPlayer] - Duration: ${value?.duration}');
-      print('[VideoPlayer] - Is playing: ${value?.isPlaying}');
-      
-      await _controller?.setLooping(true);
-      
-      if (widget.isActive) {
-        print('[VideoPlayer] Video is active, starting playback');
-        await _controller?.setVolume(1.0);
-        await _controller?.play();
-      } else if (widget.shouldPreload) {
-        print('[VideoPlayer] Preloading video without playback');
-        await _controller?.setVolume(0);
-        // Just initialize without playing
+      // Initialize without timeout - rely on error handling instead
+      print('\n[VideoPlayer] 🎯 Initializing controller...');
+      if (!mounted || !widget.isActive || _isCancelled) {
+        print('  ⚠️ Aborted before initialization:');
+        print('    - Is mounted: $mounted');
+        print('    - Is active: ${widget.isActive}');
+        print('    - Is cancelled: $_isCancelled');
+        _cleanupController();
+        return;
       }
 
-      if (mounted) {
+      await _controller?.initialize();
+      
+      if (!mounted || !widget.isActive || _isCancelled) {
+        print('  ⚠️ Aborted after initialization:');
+        print('    - Is mounted: $mounted');
+        print('    - Is active: ${widget.isActive}');
+        print('    - Is cancelled: $_isCancelled');
+        _cleanupController();
+        return;
+      }
+
+      final value = _controller?.value;
+      print('\n[VideoPlayer] ✅ Controller initialized:');
+      print('  - Video size: ${value?.size}');
+      print('  - Duration: ${value?.duration}');
+      print('  - Is playing: ${value?.isPlaying}');
+      print('  - Is looping: ${value?.isLooping}');
+      print('  - Is buffering: ${value?.isBuffering}');
+      print('  - Volume: ${value?.volume}');
+      
+      if (!mounted || !widget.isActive || _isCancelled) {
+        _cleanupController();
+        return;
+      }
+
+      await _controller?.setLooping(true);
+      
+      if (widget.isActive && !_isCancelled) {
+        print('\n[VideoPlayer] ▶️ Starting playback:');
+        print('  - Video ID: ${widget.video.id}');
+        await _controller?.setVolume(1.0);
+        await _controller?.play();
+      } else {
+        print('\n[VideoPlayer] ⚠️ Video inactive or cancelled:');
+        print('  - Is active: ${widget.isActive}');
+        print('  - Is cancelled: $_isCancelled');
+        _cleanupController();
+        return;
+      }
+
+      if (mounted && !_isCancelled) {
         setState(() {
           _isInitialized = true;
-          print('[VideoPlayer] State updated: initialized = true');
+          _hasError = false;
+          print('\n[VideoPlayer] 🔄 State updated:');
+          print('  - Initialized: $_isInitialized');
+          print('  - Has error: $_hasError');
         });
       }
     } catch (e, stackTrace) {
-      print('[VideoPlayer] Error initializing video:');
-      print('[VideoPlayer] Error: $e');
-      print('[VideoPlayer] Stack trace: $stackTrace');
+      print('\n[VideoPlayer] ❌ Initialization error:');
+      print('  - Error: $e');
+      print('  - Stack trace: $stackTrace');
       
-      // Cleanup on error
+      _decrementControllerCount();
+      
       await _cleanupController();
       
-      if (mounted) {
-        setState(() => _isInitialized = false);
-        
-        // Show error to user
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error playing video: ${e.toString()}'),
-            duration: const Duration(seconds: 3),
-          ),
-        );
+      if (mounted && !_isCancelled) {
+        setState(() {
+          _isInitialized = false;
+          if (_shouldShowErrorToUser(e)) {
+            _hasError = true;
+          }
+        });
       }
     }
   }
@@ -211,27 +342,79 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     
     // Handle playback errors
     if (_controller!.value.hasError) {
-      print('[VideoPlayer] Playback error: ${_controller!.value.errorDescription}');
-      _cleanupController();
-      // Retry initialization after error
-      _initializeVideo();
+      print('[VideoPlayer] ⚠️ Playback error: ${_controller!.value.errorDescription}');
+      // Only retry if this is the active video and not cancelled
+      if (widget.isActive && !_isCancelled) {
+        _cleanupController();
+        // Add delay before retrying
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted && !_isCancelled) {
+            _initializeVideo();
+          }
+        });
+      }
     }
   }
 
-  Future<void> _cleanupController() async {
+  Future<void> _cleanupController({bool isTransition = false}) async {
     final oldController = _controller;
     _controller = null;
+    _isInitialized = false;
+    
     try {
-      await oldController?.dispose();
+      print('\n[VideoPlayer] 🧹 Starting cleanup:');
+      print('  - Video ID: ${widget.video.id}');
+      print('  - Cleanup type: ${isTransition ? 'Screen Transition' : 'Normal Flow'}');
+      print('  - Controller exists: ${oldController != null}');
+      print('  - Controller initialized: ${oldController?.value.isInitialized}');
+      print('  - Current active controllers: $_activeControllers');
+      print('  - Is cancelled: $_isCancelled');
+      print('  - Is mounted: $mounted');
+      print('  - Is active: ${widget.isActive}');
+      
+      if (oldController != null) {
+        print('  🔄 Cleaning up controller:');
+        // Stop playback first
+        await oldController.pause();
+        await oldController.setVolume(0.0);
+        print('    ✓ Playback stopped');
+        
+        // Remove listener
+        oldController.removeListener(_onControllerUpdate);
+        print('    ✓ Listener removed');
+        
+        // Dispose the controller
+        await oldController.dispose();
+        _decrementControllerCount();
+        print('    ✓ Controller disposed');
+
+        print('  📊 Cleanup status:');
+        print('    - Active controllers: $_activeControllers');
+        print('    - Is cancelled: $_isCancelled');
+      }
+
+      // Force counter reset during transitions if it's non-zero
+      if (isTransition && _activeControllers > 0) {
+        print('\n  ⚠️ Found lingering controllers during transition:');
+        print('    - Current count: $_activeControllers');
+        print('    - Forcing reset to 0');
+        _activeControllers = 0;
+      }
     } catch (e) {
-      print('[VideoPlayer] Error disposing controller: $e');
+      print('\n[VideoPlayer] ❌ Error during cleanup:');
+      print('  - Error: $e');
+      // Still decrement counter even if cleanup fails
+      if (oldController != null) {
+        _decrementControllerCount();
+      }
     }
   }
 
-  @override
-  void dispose() {
-    _cleanupController();
-    super.dispose();
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
   void _togglePlayPause() {
@@ -473,6 +656,13 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     );
   }
 
+  bool _shouldShowErrorToUser(dynamic error) {
+    // Don't show errors for common/temporary issues
+    if (error is TimeoutException) return false;
+    if (error.toString().contains('MediaCodecVideoRenderer')) return false;
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -489,7 +679,15 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                     aspectRatio: _controller!.value.aspectRatio,
                     child: VideoPlayer(_controller!),
                   )
-                : const Center(child: CircularProgressIndicator()),
+                : Center(
+                    child: _hasError
+                        ? const Icon(
+                            Icons.error_outline,
+                            color: Colors.white54,
+                            size: 36,
+                          )
+                        : const CircularProgressIndicator(),
+                  ),
           ),
         ),
 
@@ -497,11 +695,9 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
         Positioned(
           left: 0,
           right: 0,
-          bottom: widget.isGameMode 
-              ? MediaQuery.of(context).size.height * 0.5 + 16 // When game is active, position above game
-              : 16, // Just above navigation bar
+          bottom: 0,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            height: MediaQuery.of(context).size.height * 0.25, // Gradient height
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.bottomCenter,
@@ -513,6 +709,18 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                 stops: const [0.0, 1.0],
               ),
             ),
+          ),
+        ),
+
+        // Title and description
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: widget.isGameMode 
+              ? MediaQuery.of(context).size.height * 0.5 + 80 // When game is active, position above game
+              : MediaQuery.of(context).viewPadding.bottom + kBottomNavigationBarHeight + 48, // Just above nav bar with some padding
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,

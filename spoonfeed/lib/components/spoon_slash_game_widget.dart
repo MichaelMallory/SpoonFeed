@@ -23,10 +23,22 @@ class _SpoonSlashGameWidgetState extends State<SpoonSlashGameWidget> {
   void initState() {
     super.initState();
     game = SpoonSlashGame(onScoreChanged: (score) {
+      // Only call the widget's onScoreChanged callback
       widget.onScoreChanged(score);
-      // Update the GameService with the new score
-      Provider.of<GameService>(context, listen: false).updateScore(score);
     });
+    
+    // Add a game state listener
+    game.addStateListener(() {
+      if (mounted) {
+        setState(() {});  // Rebuild when game state changes
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    game.removeStateListener();
+    super.dispose();
   }
 
   @override

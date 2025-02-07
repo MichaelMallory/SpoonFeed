@@ -14,6 +14,7 @@ import 'screens/profile/profile_screen.dart';
 import 'services/auth_service.dart';
 import 'services/config_service.dart';
 import 'services/game_service.dart';
+import 'services/cookbook_service.dart';
 
 // Initialize logger for debugging
 final logger = Logger();
@@ -44,6 +45,7 @@ void main() async {
       providers: [
         ChangeNotifierProvider(create: (_) => GameService()),
         ChangeNotifierProvider(create: (_) => AuthService()),
+        Provider(create: (_) => CookbookService()),
       ],
       child: const SpoonFeedApp(),
     ),
@@ -77,7 +79,8 @@ class SpoonFeedApp extends StatelessWidget {
         '/': (context) => const SplashScreen(),
         '/onboarding': (context) => const OnboardingScreen(),
         '/auth': (context) => const AuthScreen(),
-        '/profile-setup': (context) => const ProfileSetupScreen(),
+        '/profile-setup': (context) => const ProfileSetupScreen(isInitialSetup: true),
+        '/profile-edit': (context) => const ProfileSetupScreen(isInitialSetup: false),
         '/profile': (context) => ProfileScreen(userId: FirebaseAuth.instance.currentUser?.uid ?? ''),
         '/main': (context) => const MainScreen(),
         '/upload': (context) => const UploadScreen(),

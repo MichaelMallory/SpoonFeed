@@ -37,12 +37,25 @@ class AuthService extends ChangeNotifier {
       if (user == null) throw Exception('Failed to create user');
       _logger.d('Firebase Auth user created successfully with ID: ${user.uid}');
 
-      // Create user document in Firestore with retry mechanism
+      // Wait for auth state to be ready and verify it matches
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (_auth.currentUser?.uid != user.uid) {
+        _logger.w('Auth state not ready or mismatch, waiting additional time...');
+        await Future.delayed(const Duration(seconds: 1));
+        
+        // Final verification
+        if (_auth.currentUser?.uid != user.uid) {
+          throw Exception('Auth state verification failed');
+        }
+      }
+
+      // Create user document in Firestore
       _logger.d('Creating Firestore user document...');
       final UserModel newUser = UserModel(
         uid: user.uid,
         email: email,
         username: username,
+        displayName: username, // Set initial display name to username
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -54,16 +67,37 @@ class AuthService extends ChangeNotifier {
 
       while (retryCount < maxRetries) {
         try {
-          await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
+          final userDoc = _firestore.collection('users').doc(user.uid);
+          
+          // First check if document already exists
+          final docSnapshot = await userDoc.get();
+          if (docSnapshot.exists) {
+            _logger.w('User document already exists, skipping creation');
+            return UserModel.fromFirestore(docSnapshot);
+          }
+
+          // Create the document
+          await userDoc.set(newUser.toMap());
           _logger.i('User document created successfully in Firestore');
           break;
         } catch (e) {
           retryCount++;
           _logger.w('Attempt $retryCount failed to create Firestore document: $e');
+          
+          if (e is FirebaseException) {
+            if (e.code == 'permission-denied') {
+              _logger.e('Permission denied creating user document. Error: ${e.message}');
+              throw Exception('Permission denied creating user profile. Please try again.');
+            }
+          }
+          
           if (retryCount == maxRetries) {
             _logger.e('Failed to create Firestore document after $maxRetries attempts');
-            rethrow;
+            // Clean up auth user if we can't create Firestore document
+            await user.delete().catchError((e) => _logger.e('Failed to delete auth user: $e'));
+            throw Exception('Failed to create user profile. Please try again.');
           }
+          
           await Future.delayed(retryDelay);
         }
       }
@@ -96,16 +130,44 @@ class AuthService extends ChangeNotifier {
       final doc = await _firestore.collection('users').doc(user.uid).get();
       if (!doc.exists) {
         _logger.w('User document not found, creating one...');
-        // Create a basic user document if it doesn't exist
+        // Create a basic user document if it doesn't exist - matching signup format
+        final username = email.split('@')[0]; // Use email prefix as temporary username
         final UserModel newUser = UserModel(
           uid: user.uid,
           email: email,
-          username: email.split('@')[0], // Use email prefix as temporary username
+          username: username,
+          displayName: username, // Match signup by setting displayName
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
-        await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
-        return newUser;
+        
+        // Use same retry mechanism as signup
+        int retryCount = 0;
+        const maxRetries = 3;
+        const retryDelay = Duration(milliseconds: 500);
+
+        while (retryCount < maxRetries) {
+          try {
+            await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
+            _logger.i('Fallback user document created successfully');
+            return newUser;
+          } catch (e) {
+            retryCount++;
+            _logger.w('Attempt $retryCount failed to create fallback document: $e');
+            
+            if (e is FirebaseException && e.code == 'permission-denied') {
+              _logger.e('Permission denied creating fallback document. Error: ${e.message}');
+              throw Exception('Permission denied accessing user profile. Please try again.');
+            }
+            
+            if (retryCount == maxRetries) {
+              _logger.e('Failed to create fallback document after $maxRetries attempts');
+              throw Exception('Failed to access user profile. Please try again.');
+            }
+            
+            await Future.delayed(retryDelay);
+          }
+        }
       }
 
       _logger.i('User signed in successfully: ${user.uid}');
