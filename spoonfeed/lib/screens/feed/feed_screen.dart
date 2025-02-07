@@ -5,7 +5,7 @@ import '../../components/video_player_fullscreen.dart';
 import '../../components/spoon_slash_game.dart';
 import '../../components/spoon_slash_game_widget.dart';
 import '../../models/video_model.dart';
-import '../../services/video_service.dart';
+import '../../services/video/video_service.dart';
 import '../../services/game_service.dart';
 
 class FeedScreen extends StatefulWidget {

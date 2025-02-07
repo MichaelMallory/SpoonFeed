@@ -7,7 +7,7 @@ import '../../models/user_model.dart';
 import '../../models/game_score_model.dart';
 import '../../components/video_player_fullscreen.dart';
 import '../../models/video_model.dart';
-import '../../services/video_service.dart';
+import '../../services/video/video_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String userId;
@@ -89,12 +89,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadUserVideos() async {
     try {
       print('[ProfileScreen] Loading videos for user: ${widget.userId}');
-      final docs = await _videoService.getUserVideos(widget.userId);
+      final snapshot = await _videoService.getUserVideos(widget.userId);
       
       if (mounted) {
         setState(() {
           _videos.clear(); // Clear existing videos before adding new ones
-          _videos.addAll(docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
+          _videos.addAll(snapshot.docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
         });
       }
 

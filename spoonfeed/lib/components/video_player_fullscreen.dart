@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../models/video_model.dart';
-import '../services/video_service.dart';
+import '../services/video/video_service.dart';
 import 'comments_sheet.dart';
 import 'share_sheet.dart';
 import 'package:flutter/foundation.dart';
@@ -82,16 +82,19 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       final videoUrl = await _videoService.getVideoUrl(widget.video.videoUrl);
       print('[VideoPlayer] Retrieved video URL: $videoUrl');
       
-      print('[VideoPlayer] Creating controller for ${kIsWeb ? 'web' : 'file'} playback');
-      _controller = kIsWeb
-          ? VideoPlayerController.networkUrl(Uri.parse(videoUrl))
-          : VideoPlayerController.file(File(videoUrl));
-
-      // Set video quality based on network conditions
-      if (!kIsWeb) {
-        await _controller?.setPlaybackSpeed(1.0);
-        await _controller?.setVolume(0.0); // Start muted and unmute when active
+      if (videoUrl == null) {
+        print('[VideoPlayer] Failed to get video URL');
+        setState(() => _isInitialized = false);
+        return;
       }
+
+      print('[VideoPlayer] Creating controller for ${kIsWeb ? 'web' : 'file'} playback');
+      
+      // Always use network URL for video playback
+      _controller = VideoPlayerController.networkUrl(
+        Uri.parse(videoUrl),
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
 
       print('[VideoPlayer] Initializing controller');
       await _controller?.initialize();
@@ -131,6 +134,11 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       print('[VideoPlayer] Error initializing video:');
       print('[VideoPlayer] Error: $e');
       print('[VideoPlayer] Stack trace: $stackTrace');
+      
+      // Cleanup on error
+      await _controller?.dispose();
+      _controller = null;
+      
       if (mounted) {
         setState(() {
           _isInitialized = false;
@@ -169,17 +177,7 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     });
 
     // Update backend
-    _videoService.likeVideo(
-      widget.video.id,
-      onLikeUpdated: (isLiked, newCount) {
-        if (mounted) {
-          setState(() {
-            _isLiked = isLiked;
-            _likeCount = newCount;
-          });
-        }
-      },
-    );
+    _videoService.likeVideo(widget.video.id, !_isLiked);
   }
 
   void _showComments() {

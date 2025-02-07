@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import '../models/comment_model.dart';
-import '../services/video_service.dart';
+import '../services/video/video_service.dart';
 
 class CommentsSheet extends StatefulWidget {
   final String videoId;
@@ -48,7 +48,7 @@ class _CommentsSheetState extends State<CommentsSheet> {
     try {
       final comments = await widget.videoService.getVideoComments(widget.videoId);
       setState(() {
-        _comments = comments;
+        _comments = comments.map((doc) => CommentModel.fromMap(doc)).toList();
         _isLoading = false;
       });
     } catch (e) {
@@ -71,14 +71,15 @@ class _CommentsSheetState extends State<CommentsSheet> {
       final comment = await widget.videoService.addComment(
         widget.videoId,
         text,
-        onCommentAdded: widget.onCommentCountUpdated,
       );
 
-      setState(() {
-        _comments.insert(0, comment);
-        _commentController.clear();
-        _isSubmitting = false;
-      });
+      if (comment != null) {
+        setState(() {
+          _comments.insert(0, CommentModel.fromMap(comment));
+          _commentController.clear();
+          widget.onCommentCountUpdated(_comments.length);
+        });
+      }
 
       // Scroll to top to show new comment
       if (_scrollController.hasClients) {
@@ -90,26 +91,29 @@ class _CommentsSheetState extends State<CommentsSheet> {
       }
     } catch (e) {
       print('Error submitting comment: $e');
-      setState(() => _isSubmitting = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to post comment')),
         );
       }
+    } finally {
+      setState(() => _isSubmitting = false);
     }
   }
 
   Future<void> _deleteComment(CommentModel comment) async {
     try {
-      await widget.videoService.deleteComment(
+      final success = await widget.videoService.deleteComment(
         widget.videoId,
         comment.id,
-        onCommentDeleted: widget.onCommentCountUpdated,
       );
 
-      setState(() {
-        _comments.removeWhere((c) => c.id == comment.id);
-      });
+      if (success) {
+        setState(() {
+          _comments.removeWhere((c) => c.id == comment.id);
+          widget.onCommentCountUpdated(_comments.length);
+        });
+      }
     } catch (e) {
       print('Error deleting comment: $e');
       if (mounted) {

@@ -1,0 +1,7 @@
+dependencies:
+  flutter:
+    sdk: flutter
+  better_player: ^0.0.83
+  video_compress: ^3.1.2
+  path_provider: ^2.1.2
+  path: ^1.8.3 

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/video_model.dart';
-import '../services/video_service.dart';
+import '../services/video/video_service.dart';
 
 class ShareSheet extends StatefulWidget {
   final VideoModel video;

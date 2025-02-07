@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/video_model.dart';
-import '../services/video_service.dart';
+import '../services/video/video_service.dart';
 
 class VideoCard extends StatefulWidget {
   final VideoModel video;

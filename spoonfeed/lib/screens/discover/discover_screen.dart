@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../components/video_player_fullscreen.dart';
 import '../../models/video_model.dart';
-import '../../services/video_service.dart';
+import '../../services/video/video_service.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 class DiscoverScreen extends StatefulWidget {

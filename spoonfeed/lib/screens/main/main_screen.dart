@@ -30,18 +30,32 @@ class _MainScreenState extends State<MainScreen> {
     ];
   }
 
-  void _onItemTapped(int index) {
+  void _onItemTapped(int index) async {
     if (index == 2) {
       // Upload button
-      Navigator.push(
+      final result = await Navigator.push<Map<String, dynamic>>(
         context,
         MaterialPageRoute(builder: (context) => const UploadScreen()),
       );
+      
+      // If upload was successful and profile needs refresh
+      if (result != null && result['refresh'] == true) {
+        if (!mounted) return;
+        
+        // Only refresh the profile screen
+        setState(() {
+          _screens[4] = ProfileScreen(userId: _auth.currentUser?.uid ?? '');
+          _selectedIndex = 4;
+        });
+      }
       return;
     }
-    setState(() {
-      _selectedIndex = index;
-    });
+    
+    if (mounted) {
+      setState(() {
+        _selectedIndex = index;
+      });
+    }
   }
 
   @override

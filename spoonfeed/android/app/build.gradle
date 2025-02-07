@@ -1,3 +1,11 @@
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+    id 'com.google.gms.google-services'
+    id 'com.google.firebase.crashlytics'
+    id 'com.google.firebase.appdistribution'
+}
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
@@ -11,12 +19,7 @@ if (flutterRoot == null) {
     throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
 }
 
-apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android'
 apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
-apply plugin: 'com.google.gms.google-services'
-apply plugin: 'com.google.firebase.crashlytics'
-apply plugin: 'com.google.firebase.appdistribution'
 
 android {
     namespace "com.reelai.spoonfeed"
@@ -38,7 +41,7 @@ android {
 
     defaultConfig {
         applicationId "com.reelai.spoonfeed"
-        minSdkVersion flutter.minSdkVersion
+        minSdkVersion 24
         targetSdkVersion flutter.targetSdkVersion
         versionCode 1
         versionName "1.0.0"
@@ -54,6 +57,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Debug configuration
+        }
         release {
             signingConfig signingConfigs.release
             minifyEnabled true
@@ -79,4 +85,22 @@ android {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'com.google.android.play:core:1.10.3'
+}
+
+// Add task to copy APK to Flutter's expected location
+tasks.register('copyDebugApk') {
+    doLast {
+        copy {
+            from "${buildDir}/outputs/apk/debug"
+            into "${rootProject.buildDir}/app/outputs/flutter-apk"
+            include "app-debug.apk"
+        }
+    }
+}
+
+// Make the copy task run after the debug APK is built
+tasks.whenTaskAdded { task ->
+    if (task.name == 'assembleDebug') {
+        task.finalizedBy(copyDebugApk)
+    }
 }

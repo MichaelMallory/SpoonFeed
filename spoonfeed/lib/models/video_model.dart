@@ -25,20 +25,36 @@ class VideoModel {
     required this.shares,
   });
 
-  factory VideoModel.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-    return VideoModel(
-      id: doc.id,
-      userId: data['userId'] ?? '',
-      title: data['title'] ?? '',
-      description: data['description'] ?? '',
-      videoUrl: data['videoUrl'] ?? '',
-      thumbnailUrl: data['thumbnailUrl'] ?? '',
-      createdAt: (data['createdAt'] as Timestamp).toDate(),
-      likes: data['likes'] ?? 0,
-      comments: data['comments'] ?? 0,
-      shares: data['shares'] ?? 0,
-    );
+  factory VideoModel.fromFirestore(dynamic doc) {
+    if (doc is DocumentSnapshot || doc is QueryDocumentSnapshot) {
+      final data = doc.data() as Map<String, dynamic>;
+      return VideoModel(
+        id: doc.id,
+        userId: data['userId'] ?? '',
+        title: data['title'] ?? '',
+        description: data['description'] ?? '',
+        videoUrl: data['videoUrl'] ?? '',
+        thumbnailUrl: data['thumbnailUrl'] ?? '',
+        createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+        likes: data['likes'] ?? 0,
+        comments: data['comments'] ?? 0,
+        shares: data['shares'] ?? 0,
+      );
+    } else if (doc is Map<String, dynamic>) {
+      return VideoModel(
+        id: doc['id'] ?? '',
+        userId: doc['userId'] ?? '',
+        title: doc['title'] ?? '',
+        description: doc['description'] ?? '',
+        videoUrl: doc['videoUrl'] ?? '',
+        thumbnailUrl: doc['thumbnailUrl'] ?? '',
+        createdAt: (doc['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+        likes: doc['likes'] ?? 0,
+        comments: doc['comments'] ?? 0,
+        shares: doc['shares'] ?? 0,
+      );
+    }
+    throw ArgumentError('Unsupported type for VideoModel.fromFirestore: ${doc.runtimeType}');
   }
 
   Map<String, dynamic> toMap() {

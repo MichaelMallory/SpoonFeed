@@ -20,14 +20,21 @@ final logger = Logger();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await ConfigService.initialize();
   
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    await FirebaseConfig.configureEmulators();
-    logger.i('Firebase initialized successfully');
+    // Initialize ConfigService first
+    await ConfigService.initialize();
+    
+    // Check if Firebase is already initialized
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      await FirebaseConfig.configureEmulators();
+      logger.i('Firebase initialized successfully');
+    } else {
+      logger.i('Firebase was already initialized');
+    }
   } catch (e) {
     logger.e('Failed to initialize Firebase: $e');
   }

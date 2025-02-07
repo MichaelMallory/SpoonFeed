@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:universal_html/html.dart' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
-import '../../services/video_service.dart';
+import '../../services/video/video_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -53,18 +53,33 @@ class _UploadScreenState extends State<UploadScreen> {
         _videoFile = video;
       });
       
-      if (kIsWeb) {
-        _controller = VideoPlayerController.networkUrl(Uri.parse(video.path))
-          ..initialize().then((_) {
-            setState(() {});
-            _controller?.play(); // Auto-play preview
-          });
-      } else {
-        _controller = VideoPlayerController.file(File(video.path))
-          ..initialize().then((_) {
-            setState(() {});
-            _controller?.play(); // Auto-play preview
-          });
+      try {
+        if (kIsWeb) {
+          _controller = VideoPlayerController.networkUrl(Uri.parse(video.path));
+        } else {
+          _controller = VideoPlayerController.file(File(video.path));
+        }
+
+        await _controller?.initialize();
+        
+        if (mounted) {
+          setState(() {});
+          _controller?.play();
+        }
+      } catch (e) {
+        print('Error initializing video preview: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Unable to preview video, but you can still upload it.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        // Even if preview fails, keep the video file for upload
+        setState(() {
+          _videoFile = video;
+        });
       }
     }
   }
@@ -81,28 +96,28 @@ class _UploadScreenState extends State<UploadScreen> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw Exception('User must be logged in to upload videos');
 
-      String videoId;
+      String? videoId;
       if (kIsWeb) {
         // Handle web upload
         final bytes = await _videoFile!.readAsBytes();
-        videoId = await _videoService.uploadVideoWeb(
-          videoBytes: bytes,
-          fileName: _videoFile!.name,
-          title: _titleController.text,
-          description: _descriptionController.text,
+        videoId = await _videoService.uploadVideo(
+          _videoFile!.path,
+          _titleController.text,
+          _descriptionController.text,
           onProgress: (progress) {
             setState(() {
               _uploadProgress = progress;
             });
           },
+          isWeb: true,
         );
       } else {
         // Handle mobile/desktop upload
-        final videoFile = File(_videoFile!.path);
         videoId = await _videoService.uploadVideo(
-          videoFile,
-          user.uid,
-          (progress) {
+          _videoFile!.path,
+          _titleController.text,
+          _descriptionController.text,
+          onProgress: (progress) {
             setState(() {
               _uploadProgress = progress;
             });
@@ -116,21 +131,23 @@ class _UploadScreenState extends State<UploadScreen> {
       if (mounted) {
         // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Video uploaded successfully!')),
+          const SnackBar(
+            content: Text('Video uploaded successfully!'),
+            backgroundColor: Colors.green,
+          ),
         );
 
-        // Navigate back to profile with refresh flag
-        Navigator.of(context).pushNamedAndRemoveUntil(
-          '/profile',
-          (route) => false,
-          arguments: {'refresh': true},
-        );
+        // Pop back to the main screen and refresh the profile
+        Navigator.of(context).pop({'refresh': true});
       }
     } catch (e) {
       print('Error uploading video: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error uploading video: $e')),
+          SnackBar(
+            content: Text('Error uploading video: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {

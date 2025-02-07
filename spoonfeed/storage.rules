@@ -34,7 +34,7 @@ service firebase.storage {
     }
 
     // Videos directory
-    match /videos/{userId}/{fileName} {
+    match /videos/{userId}/{type}/{fileName} {
       allow read: if true;
       allow create: if isAuthenticated()
         && isOwner(userId)
@@ -42,6 +42,15 @@ service firebase.storage {
         && isValidSize(request.resource.size);
       allow delete: if isAuthenticated()
         && isOwner(userId);
+    }
+
+    // Videos thumbnails (legacy rule can be removed)
+    match /videos/{userId}/thumbnails/{fileName} {
+      allow read: if true;
+      allow create: if isAuthenticated()
+        && isOwner(userId)
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.size < 5 * 1024 * 1024; // 5MB limit for thumbnails
     }
 
     // Recipe videos (legacy)
