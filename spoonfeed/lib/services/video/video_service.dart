@@ -376,23 +376,52 @@ class VideoService {
 
   Future<List<Map<String, dynamic>>> getVideoComments(String videoId) async {
     try {
+      print('[VideoService] 📝 Getting comments for video: $videoId');
       final snapshot = await _firestore
           .collection('videos')
           .doc(videoId)
           .collection('comments')
-          .orderBy('timestamp', descending: true)
+          .orderBy('createdAt', descending: true)
           .get();
 
-      return snapshot.docs
+      final comments = snapshot.docs
           .map((doc) => {
                 'id': doc.id,
                 ...doc.data(),
               })
           .toList();
+      
+      print('[VideoService] ✅ Retrieved ${comments.length} comments');
+      return comments;
     } catch (e) {
-      print('[VideoService] Error getting video comments: $e');
+      print('[VideoService] ❌ Error getting video comments: $e');
+      print('  - Error details: $e');
       return [];
     }
+  }
+
+  // Add new method for streaming comments
+  Stream<List<Map<String, dynamic>>> streamVideoComments(String videoId) {
+    return _firestore
+        .collection('videos')
+        .doc(videoId)
+        .collection('comments')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => {
+                  'id': doc.id,
+                  ...doc.data(),
+                })
+            .toList());
+  }
+
+  // Add method to stream video metadata (for comment count)
+  Stream<DocumentSnapshot<Map<String, dynamic>>> streamVideoMetadata(String videoId) {
+    return _firestore
+        .collection('videos')
+        .doc(videoId)
+        .snapshots();
   }
 
   Future<Map<String, dynamic>?> addComment(
@@ -407,60 +436,86 @@ class VideoService {
         return null;
       }
 
+      print('[VideoService] 👤 User info:');
+      print('  - User ID: ${user.uid}');
+      print('  - Email: ${user.email}');
+      print('  - Display Name: ${user.displayName}');
+      print('  - Photo URL: ${user.photoURL}');
+      print('  - Provider ID: ${user.providerData.map((e) => e.providerId).join(", ")}');
+
       // Get user data to include in comment
       final userData = await _firestore
           .collection('users')
           .doc(user.uid)
           .get();
 
-      final commentRef = await _firestore
+      print('[VideoService] 📄 Firestore user data:');
+      print('  - Exists: ${userData.exists}');
+      if (userData.exists) {
+        print('  - Data: ${userData.data()}');
+      }
+
+      // Create default display name from email if no display name is available
+      String displayName = userData.data()?['displayName'] ?? 
+                          user.displayName ?? 
+                          user.email?.split('@')[0] ?? 
+                          'Anonymous';
+
+      // Create default photo URL
+      String photoUrl = userData.data()?['photoUrl'] ?? 
+                       user.photoURL ?? 
+                       '';
+
+      print('[VideoService] 📝 Creating comment with:');
+      print('  - Display Name: $displayName');
+      print('  - Photo URL: $photoUrl');
+
+      final batch = _firestore.batch();
+      
+      // Create the comment document
+      final commentRef = _firestore
           .collection('videos')
           .doc(videoId)
           .collection('comments')
-          .add({
+          .doc();
+
+      final commentData = {
+        'id': commentRef.id,
         'videoId': videoId,
         'userId': user.uid,
-        'userDisplayName': userData.data()?['displayName'] ?? user.displayName ?? 'Anonymous',
-        'userPhotoUrl': userData.data()?['photoUrl'] ?? user.photoURL ?? '',
+        'userDisplayName': displayName,
+        'userPhotoUrl': photoUrl,
         'text': text,
         'createdAt': FieldValue.serverTimestamp(),
         'likes': 0,
         'likedBy': [],
         'replies': [],
-      });
+      };
 
-      // Wait for server timestamp to resolve
-      final comment = await commentRef.get();
-      final commentData = comment.data()!;
-      
+      batch.set(commentRef, commentData);
+
       // Update video comment count
-      await _firestore.runTransaction((transaction) async {
-        final videoRef = _firestore.collection('videos').doc(videoId);
-        final videoDoc = await transaction.get(videoRef);
-        
-        if (!videoDoc.exists) {
-          throw Exception('Video not found');
-        }
-
-        final currentComments = videoDoc.data()?['comments'] ?? 0;
-        transaction.update(videoRef, {
-          'comments': currentComments + 1,
-          'lastCommentAt': FieldValue.serverTimestamp(),
-        });
+      final videoRef = _firestore.collection('videos').doc(videoId);
+      batch.update(videoRef, {
+        'comments': FieldValue.increment(1),
+        'lastCommentAt': FieldValue.serverTimestamp(),
       });
+
+      // Commit both operations
+      await batch.commit();
 
       print('[VideoService] ✅ Comment added successfully');
+      
+      // Return immediate data for UI update
       return {
-        'id': comment.id,
         ...commentData,
-        // Convert server timestamp to client timestamp for immediate display
-        'createdAt': (commentData['createdAt'] as Timestamp?) ?? Timestamp.now(),
+        'createdAt': Timestamp.now(), // Use current time for immediate display
       };
     } catch (e, stackTrace) {
       print('[VideoService] ❌ Error adding comment:');
       print('  - Error: $e');
       print('  - Stack trace: $stackTrace');
-      return null;
+      rethrow; // Rethrow to handle in UI
     }
   }
 

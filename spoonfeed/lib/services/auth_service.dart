@@ -58,6 +58,11 @@ class AuthService extends ChangeNotifier {
         displayName: username, // Set initial display name to username
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
+        isChef: false, // Default value
+        bio: '', // Default empty bio
+        followers: [],
+        following: [],
+        recipes: [],
       );
 
       // Add retry mechanism for Firestore document creation
@@ -139,6 +144,11 @@ class AuthService extends ChangeNotifier {
           displayName: username, // Match signup by setting displayName
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
+          isChef: false, // Default value
+          bio: '', // Default empty bio
+          followers: [],
+          following: [],
+          recipes: [],
         );
         
         // Use same retry mechanism as signup
@@ -247,19 +257,54 @@ class AuthService extends ChangeNotifier {
       // Check if this is a new user
       final doc = await _firestore.collection('users').doc(user.uid).get();
       if (!doc.exists) {
-        // Create new user document
+        // Generate a username from email if display name is not available
+        final baseUsername = user.displayName?.replaceAll(' ', '').toLowerCase() ?? 
+                           user.email?.split('@')[0] ?? 
+                           'user${DateTime.now().millisecondsSinceEpoch}';
+        
+        // Create new user document with proper validation
         final UserModel newUser = UserModel(
           uid: user.uid,
           email: user.email ?? '',
-          username: user.displayName ?? '',
-          displayName: user.displayName,
+          username: baseUsername,
+          displayName: user.displayName ?? baseUsername, // Fallback to username if no display name
           photoUrl: user.photoURL,
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
+          isChef: false, // Default value
+          bio: '', // Default empty bio
+          followers: [],
+          following: [],
+          recipes: [],
         );
-        await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
-        _logger.i('New user created with Google: ${user.uid}');
-        return newUser;
+
+        // Use same retry mechanism as email signup
+        int retryCount = 0;
+        const maxRetries = 3;
+        const retryDelay = Duration(milliseconds: 500);
+
+        while (retryCount < maxRetries) {
+          try {
+            await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
+            _logger.i('New user created with Google: ${user.uid}');
+            return newUser;
+          } catch (e) {
+            retryCount++;
+            _logger.w('Attempt $retryCount failed to create user document: $e');
+            
+            if (e is FirebaseException && e.code == 'permission-denied') {
+              _logger.e('Permission denied creating user document. Error: ${e.message}');
+              throw Exception('Permission denied creating user profile. Please try again.');
+            }
+            
+            if (retryCount == maxRetries) {
+              _logger.e('Failed to create user document after $maxRetries attempts');
+              throw Exception('Failed to create user profile. Please try again.');
+            }
+            
+            await Future.delayed(retryDelay);
+          }
+        }
       }
 
       _logger.i('User signed in with Google: ${user.uid}');

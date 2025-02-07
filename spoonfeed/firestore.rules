@@ -117,16 +117,23 @@ service cloud.firestore {
       match /comments/{commentId} {
         function isValidComment() {
           let comment = request.resource.data;
-          return comment.keys().hasAll(['text', 'userId', 'createdAt'])
+          return comment.keys().hasAll(['text', 'userId', 'videoId', 'createdAt'])
             && comment.text is string && comment.text.size() > 0
-            && comment.userId == request.auth.uid;
+            && comment.userId == request.auth.uid
+            && comment.videoId == videoId;
         }
 
         allow read: if true;
         allow create: if isAuthenticated() && isValidComment();
-        allow update, delete: if isAuthenticated() 
-          && resource.data.userId == request.auth.uid;
+        allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+        allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
       }
+
+      // Allow updating comment count on the video document
+      allow update: if isAuthenticated() 
+        && (resource.data.userId == request.auth.uid
+            || (request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['comments', 'lastCommentAt'])));
     }
 
     // Game scores collection
