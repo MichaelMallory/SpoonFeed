@@ -11,6 +11,9 @@ class CommentModel {
   final int likes;
   final List<String> likedBy;
   final List<CommentModel> replies;
+  final int? gameScore;
+  final bool wasPinned;
+  final bool isPinned;
 
   const CommentModel({
     required this.id,
@@ -23,6 +26,9 @@ class CommentModel {
     this.likes = 0,
     this.likedBy = const [],
     this.replies = const [],
+    this.gameScore,
+    this.wasPinned = false,
+    this.isPinned = false,
   });
 
   factory CommentModel.fromFirestore(DocumentSnapshot doc) {
@@ -40,6 +46,9 @@ class CommentModel {
       replies: (data['replies'] as List<dynamic>? ?? [])
           .map((reply) => CommentModel.fromMap(reply as Map<String, dynamic>))
           .toList(),
+      gameScore: data['gameScore'],
+      wasPinned: data['wasPinned'] ?? false,
+      isPinned: data['isPinned'] ?? false,
     );
   }
 
@@ -57,6 +66,9 @@ class CommentModel {
       replies: (data['replies'] as List<dynamic>? ?? [])
           .map((reply) => CommentModel.fromMap(reply as Map<String, dynamic>))
           .toList(),
+      gameScore: data['gameScore'],
+      wasPinned: data['wasPinned'] ?? false,
+      isPinned: data['isPinned'] ?? false,
     );
   }
 
@@ -72,6 +84,9 @@ class CommentModel {
       'likes': likes,
       'likedBy': likedBy,
       'replies': replies.map((reply) => reply.toMap()).toList(),
+      'gameScore': gameScore,
+      'wasPinned': wasPinned,
+      'isPinned': isPinned,
     };
   }
 
@@ -86,6 +101,9 @@ class CommentModel {
     int? likes,
     List<String>? likedBy,
     List<CommentModel>? replies,
+    int? gameScore,
+    bool? wasPinned,
+    bool? isPinned,
   }) {
     return CommentModel(
       id: id ?? this.id,
@@ -98,6 +116,9 @@ class CommentModel {
       likes: likes ?? this.likes,
       likedBy: likedBy ?? this.likedBy,
       replies: replies ?? this.replies,
+      gameScore: gameScore ?? this.gameScore,
+      wasPinned: wasPinned ?? this.wasPinned,
+      isPinned: isPinned ?? this.isPinned,
     );
   }
 } 

@@ -107,6 +107,11 @@ class _FeedScreenState extends State<FeedScreen> {
   void _onPageChanged(int index) {
     setState(() => _currentVideoIndex = index);
     
+    // Update current video context in GameService
+    final gameService = Provider.of<GameService>(context, listen: false);
+    final video = _videos[index];
+    gameService.setCurrentVideo(video);
+    
     // Load more videos when user reaches near the end
     if (_hasMoreVideos && index >= _videos.length - 3) {
       _loadMoreVideos();
@@ -184,6 +189,11 @@ class _FeedScreenState extends State<FeedScreen> {
             builder: (context, gameService, child) {
               final isGameActive = gameService.isGameModeActive;
               print('[FeedScreen] Game active: $isGameActive');
+              
+              // Set initial video context if not set
+              if (_videos.isNotEmpty && gameService.currentVideoId == null) {
+                gameService.setCurrentVideo(_videos[_currentVideoIndex]);
+              }
               
               return SizedBox.expand(
                 child: Column(

@@ -43,7 +43,7 @@ android {
         applicationId "com.reelai.spoonfeed"
         minSdkVersion 24
         targetSdkVersion flutter.targetSdkVersion
-        versionCode 1
+        versionCode 2
         versionName "1.0.0"
     }
 
@@ -68,7 +68,7 @@ android {
             
             firebaseAppDistribution {
                 artifactType="APK"
-                releaseNotes="Test build for internal testing"
+                releaseNotes="Update fixing Google Sign-In functionality"
                 testers="michael.mallory@reelai.com"
             }
         }

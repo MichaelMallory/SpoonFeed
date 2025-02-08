@@ -11,6 +11,8 @@ class VideoModel {
   final int likes;
   final int comments;
   final int shares;
+  final int highestGameScore;
+  final String? pinnedCommentId;
 
   VideoModel({
     required this.id,
@@ -23,6 +25,8 @@ class VideoModel {
     required this.likes,
     required this.comments,
     required this.shares,
+    this.highestGameScore = 0,
+    this.pinnedCommentId,
   });
 
   factory VideoModel.fromFirestore(dynamic doc) {
@@ -39,6 +43,8 @@ class VideoModel {
         likes: data['likes'] ?? 0,
         comments: data['comments'] ?? 0,
         shares: data['shares'] ?? 0,
+        highestGameScore: data['highestGameScore'] ?? 0,
+        pinnedCommentId: data['pinnedCommentId'],
       );
     } else if (doc is Map<String, dynamic>) {
       return VideoModel(
@@ -52,6 +58,8 @@ class VideoModel {
         likes: doc['likes'] ?? 0,
         comments: doc['comments'] ?? 0,
         shares: doc['shares'] ?? 0,
+        highestGameScore: doc['highestGameScore'] ?? 0,
+        pinnedCommentId: doc['pinnedCommentId'],
       );
     }
     throw ArgumentError('Unsupported type for VideoModel.fromFirestore: ${doc.runtimeType}');
@@ -68,6 +76,8 @@ class VideoModel {
       'likes': likes,
       'comments': comments,
       'shares': shares,
+      'highestGameScore': highestGameScore,
+      'pinnedCommentId': pinnedCommentId,
     };
   }
 
@@ -82,6 +92,8 @@ class VideoModel {
     int? likes,
     int? comments,
     int? shares,
+    int? highestGameScore,
+    String? pinnedCommentId,
   }) {
     return VideoModel(
       id: id ?? this.id,
@@ -94,6 +106,8 @@ class VideoModel {
       likes: likes ?? this.likes,
       comments: comments ?? this.comments,
       shares: shares ?? this.shares,
+      highestGameScore: highestGameScore ?? this.highestGameScore,
+      pinnedCommentId: pinnedCommentId ?? this.pinnedCommentId,
     );
   }
 } 
