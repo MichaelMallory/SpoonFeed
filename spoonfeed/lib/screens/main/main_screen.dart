@@ -16,18 +16,33 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
   final _auth = FirebaseAuth.instance;
-
   late final List<Widget> _screens;
+  static final PageStorageBucket _bucket = PageStorageBucket();
 
   @override
   void initState() {
     super.initState();
     _screens = <Widget>[
-      const FeedScreen(),
-      const DiscoverScreen(),
-      const UploadScreen(),
-      const CookbookScreen(),
-      ProfileScreen(userId: _auth.currentUser?.uid ?? ''),
+      PageStorage(
+        bucket: _bucket,
+        child: const FeedScreen(),
+      ),
+      PageStorage(
+        bucket: _bucket,
+        child: const DiscoverScreen(),
+      ),
+      PageStorage(
+        bucket: _bucket,
+        child: const UploadScreen(),
+      ),
+      PageStorage(
+        bucket: _bucket,
+        child: const CookbookScreen(),
+      ),
+      PageStorage(
+        bucket: _bucket,
+        child: ProfileScreen(userId: _auth.currentUser?.uid ?? ''),
+      ),
     ];
   }
 
@@ -43,9 +58,41 @@ class _MainScreenState extends State<MainScreen> {
       if (result != null && result['refresh'] == true) {
         if (!mounted) return;
         
+        // Show success banner
+        ScaffoldMessenger.of(context).showMaterialBanner(
+          MaterialBanner(
+            backgroundColor: Colors.green,
+            content: const Text(
+              'SpoonFul shared successfully!',
+              style: TextStyle(color: Colors.white),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                },
+                child: const Text(
+                  'DISMISS',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        );
+        
+        // Auto-hide banner after 3 seconds
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+          }
+        });
+        
         // Only refresh the profile screen
         setState(() {
-          _screens[4] = ProfileScreen(userId: _auth.currentUser?.uid ?? '');
+          _screens[4] = PageStorage(
+            bucket: _bucket,
+            child: ProfileScreen(userId: _auth.currentUser?.uid ?? ''),
+          );
           _selectedIndex = 4;
         });
       }
@@ -65,9 +112,12 @@ class _MainScreenState extends State<MainScreen> {
     return Scaffold(
       extendBody: true, // Allow content to go behind bottom nav
       resizeToAvoidBottomInset: false,
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _screens,
+      body: PageStorage(
+        bucket: _bucket,
+        child: IndexedStack(
+          index: _selectedIndex,
+          children: _screens,
+        ),
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -97,15 +147,15 @@ class _MainScreenState extends State<MainScreen> {
           items: const <BottomNavigationBarItem>[
             BottomNavigationBarItem(
               icon: Icon(Icons.home),
-              label: 'Home',
+              label: 'SpoonFeed',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.search),
-              label: 'Discover',
+              label: 'A la carte',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.add_circle_outline),
-              label: 'Upload',
+              label: 'Share',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.book),

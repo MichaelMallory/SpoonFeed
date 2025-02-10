@@ -11,6 +11,9 @@ import '../services/cookbook_service.dart';
 import 'package:provider/provider.dart';
 import '../models/cookbook_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../providers/cook_mode_provider.dart';
+import 'cook_mode/cook_mode_button.dart';
+import 'cook_mode/camera_preview_overlay.dart';
 
 class VideoPlayerFullscreen extends StatefulWidget {
   final VideoModel video;
@@ -30,7 +33,7 @@ class VideoPlayerFullscreen extends StatefulWidget {
   _VideoPlayerFullscreenState createState() => _VideoPlayerFullscreenState();
 }
 
-class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with AutomaticKeepAliveClientMixin {
+class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with AutomaticKeepAliveClientMixin, RouteAware {
   VideoPlayerController? _controller;
   bool _isInitialized = false;
   final VideoService _videoService = VideoService();
@@ -41,6 +44,8 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   bool _hasError = false;
   bool _isCancelled = false;  // Flag to track cancellation state
   static int _activeControllers = 0;  // Static counter for active controllers
+  static const int MAX_ACTIVE_CONTROLLERS = 3; // Back to 3 controllers for home feed
+  late RouteObserver<ModalRoute<void>> _routeObserver;
 
   @override
   bool get wantKeepAlive => widget.isActive || widget.shouldPreload;
@@ -52,35 +57,143 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     print('  - New total: $_activeControllers');
     print('  - Is mounted: $mounted');
     print('  - Is active: ${widget.isActive}');
+    
+    // Safety check - if we have too many controllers, force cleanup of inactive ones
+    if (_activeControllers > MAX_ACTIVE_CONTROLLERS) {
+      print('  ⚠️ Too many controllers, cleaning up inactive ones');
+      if (!widget.isActive) {
+        _cleanupController(reason: 'Too many active controllers');
+      }
+    }
   }
 
   void _decrementControllerCount() {
-    _activeControllers--;
+    if (_activeControllers > 0) {
+      _activeControllers--;
+    } else {
+      _activeControllers = 0;
+    }
     print('\n[VideoPlayer] 📉 Controller counter decremented:');
     print('  - Video ID: ${widget.video.id}');
     print('  - New total: $_activeControllers');
-    print('  - Is mounted: $mounted');
-    
-    // Safety check for negative values
-    if (_activeControllers < 0) {
-      print('  ⚠️ Counter went negative, resetting to 0');
-      _activeControllers = 0;
-    }
   }
 
   @override
   void initState() {
     super.initState();
-    print('\n[VideoPlayer] 🎬 INIT STATE for video: ${widget.video.id}');
-    print('  - Active: ${widget.isActive}');
-    print('  - Preload: ${widget.shouldPreload}');
-    print('  - Total controllers: $_activeControllers');
-    print('  - Is mounted: $mounted');
-    _isCancelled = false;  // Reset cancelled state on init
-    if (widget.isActive) {
+    _routeObserver = RouteObserver<ModalRoute<void>>();
+    print('\n[VideoPlayer] 🎬 InitState for: ${widget.video.title}');
+    print('  - Is active: ${widget.isActive}');
+    print('  - Should preload: ${widget.shouldPreload}');
+    
+    // Only initialize if active or should preload
+    if (widget.isActive || widget.shouldPreload) {
       _initializeVideo();
     }
     _initializeMetadata();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _routeObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
+  void didUpdateWidget(VideoPlayerFullscreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    
+    print('\n[VideoPlayer] 🔄 Widget updated:');
+    print('  - Video ID: ${widget.video.id}');
+    print('  - Old active: ${oldWidget.isActive}');
+    print('  - New active: ${widget.isActive}');
+    print('  - Should preload: ${widget.shouldPreload}');
+    print('  - Is initialized: $_isInitialized');
+    print('  - Has controller: ${_controller != null}');
+    
+    // Handle cook mode controller management
+    if (Provider.of<CookModeProvider>(context, listen: false).isActive) {
+      if (!widget.isActive && oldWidget.isActive) {
+        Provider.of<CookModeProvider>(context, listen: false)
+          .setVideoController(null);
+      }
+    }
+    
+    // Handle active state changes
+    if (widget.isActive != oldWidget.isActive || widget.shouldPreload != oldWidget.shouldPreload) {
+      if (widget.isActive || widget.shouldPreload) {
+        // Becoming active or should preload
+        if (!_isInitialized || _controller == null) {
+          print('  - Initializing video on active/preload');
+          _initializeVideo();
+        } else if (widget.isActive) {
+          print('  - Playing existing controller');
+          // If we're activating a preloaded video, it should be ready to play instantly
+          _controller?.setVolume(1.0);
+          _controller?.play();
+          // Update cook mode provider if needed
+          if (Provider.of<CookModeProvider>(context, listen: false).isActive) {
+            Provider.of<CookModeProvider>(context, listen: false)
+              .setVideoController(_controller);
+          }
+        }
+      } else {
+        // No longer active or preloading
+        print('  - Cleaning up inactive video');
+        _cleanupController(reason: 'No longer active or preloading');
+      }
+    }
+
+    // Only cleanup if really far from viewport (more than 1 video away)
+    if (!widget.isActive && !widget.shouldPreload && _controller != null) {
+      print('  - Cleaning up distant video');
+      _cleanupController(reason: 'Too far from viewport');
+    }
+  }
+
+  @override
+  void deactivate() {
+    print('\n[VideoPlayer] 🔌 DEACTIVATE for video: ${widget.video.id}');
+    print('  - Screen transition or widget tree change detected');
+    print('  - Has controller: ${_controller != null}');
+    print('  - Controller initialized: ${_controller?.value.isInitialized}');
+    print('  - Total active controllers: $_activeControllers');
+    print('  - Should preload: ${widget.shouldPreload}');
+    
+    // Always cleanup on deactivate unless explicitly preloading and still mounted
+    if (!widget.shouldPreload || !mounted) {
+      _cleanupController(reason: 'Widget deactivated');
+    }
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
+    print('\n[VideoPlayer] 🗑 Disposing video player: ${widget.video.id}');
+    _routeObserver.unsubscribe(this);
+    // Clear controller from cook mode provider
+    Provider.of<CookModeProvider>(context, listen: false)
+      .setVideoController(null);
+    _cleanupController(reason: 'Widget disposed');
+    super.dispose();
+  }
+
+  @override
+  void didPushNext() {
+    // Route was pushed on top of this one - cleanup ALL controllers
+    print('\n[VideoPlayer] 📱 Route pushed on top: ${widget.video.id}');
+    _activeControllers = 0; // Reset counter since we're navigating away
+    _cleanupController(reason: 'Route pushed on top');
+  }
+
+  @override
+  void didPopNext() {
+    // Returning to this route - only initialize if active
+    print('\n[VideoPlayer] 📱 Returning to route: ${widget.video.id}');
+    _activeControllers = 0; // Reset counter when returning
+    if (widget.isActive) {
+      _initializeVideo();
+    }
   }
 
   Future<void> _initializeMetadata() async {
@@ -115,109 +228,40 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     }
   }
 
-  @override
-  void deactivate() {
-    print('\n[VideoPlayer] 🔌 DEACTIVATE for video: ${widget.video.id}');
-    print('  - Screen transition or widget tree change detected');
-    print('  - Has controller: ${_controller != null}');
-    print('  - Controller initialized: ${_controller?.value.isInitialized}');
-    print('  - Total active controllers: $_activeControllers');
-    print('  - Is cancelled: $_isCancelled');
-    _isCancelled = true;
-    _cleanupController(isTransition: true);
-    super.deactivate();
-  }
-
-  @override
-  void dispose() {
-    print('\n[VideoPlayer] 🗑️ DISPOSE for video: ${widget.video.id}');
-    print('  - Final cleanup before widget destruction');
-    print('  - Has controller: ${_controller != null}');
-    print('  - Controller initialized: ${_controller?.value.isInitialized}');
-    print('  - Total active controllers: $_activeControllers');
-    print('  - Is cancelled: $_isCancelled');
-    _isCancelled = true;
-    _cleanupController(isTransition: true);
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(VideoPlayerFullscreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    
-    // Reset cancelled state when video becomes active
-    if (!oldWidget.isActive && widget.isActive) {
-      print('\n[VideoPlayer] 🔄 Video becoming active: ${widget.video.id}');
-      print('  - Previous active state: ${oldWidget.isActive}');
-      print('  - New active state: ${widget.isActive}');
-      print('  - Current controllers: $_activeControllers');
-      _isCancelled = false;
-    }
-    
-    if (widget.isActive != oldWidget.isActive) {
-      print('\n[VideoPlayer] 🔄 Video active state changed:');
-      print('  - Video ID: ${widget.video.id}');
-      print('  - Previous state: ${oldWidget.isActive}');
-      print('  - New state: ${widget.isActive}');
-      print('  - Controller exists: ${_controller != null}');
-      print('  - Controller initialized: ${_controller?.value.isInitialized}');
-      print('  - Total active controllers: $_activeControllers');
-      print('  - Is cancelled: $_isCancelled');
-      
-      if (widget.isActive) {
-        if (_controller == null || !_isInitialized) {
-          print('  - Initializing previously inactive video');
-          _initializeVideo();
-        } else {
-          print('  - Resuming existing controller');
-          _controller?.setVolume(1.0);
-          _controller?.play();
-        }
-      } else {
-        _isCancelled = true;
-        _controller?.pause();
-        print('  - Video inactive, cleaning up');
-        _cleanupController();
-      }
-    }
-  }
-
   Future<void> _initializeVideo() async {
-    if (_isCancelled) {
-      print('\n[VideoPlayer] ⚠️ Initialization cancelled:');
-      print('  - Video ID: ${widget.video.id}');
-      print('  - Is mounted: $mounted');
-      print('  - Is active: ${widget.isActive}');
+    print('\n[VideoPlayer] 🔄 Starting initialization:');
+    print('  - Video ID: ${widget.video.id}');
+    print('  - Is active: ${widget.isActive}');
+    print('  - Should preload: ${widget.shouldPreload}');
+    
+    // Check if we should proceed
+    if (!mounted || (!widget.isActive && !widget.shouldPreload)) {
+      print('  ⚠️ Initialization skipped:');
+      print('    - Is mounted: $mounted');
+      print('    - Is active: ${widget.isActive}');
+      print('    - Should preload: ${widget.shouldPreload}');
       return;
+    }
+
+    // Always allow initialization for explicitly active videos
+    if (widget.isActive) {
+      print('  ✅ Allowing initialization for active video');
+    } 
+    // For preloading/background videos, respect controller limit
+    else if (_activeControllers >= MAX_ACTIVE_CONTROLLERS) {
+      print('  ⚠️ Skipping initialization of background video due to controller limit');
+      return;
+    }
+
+    // Only cleanup if we have an existing controller
+    if (_controller != null) {
+      print('  - Cleaning up existing controller');
+      await _cleanupController(reason: 'Reinitializing video');
     }
     
     try {
-      print('\n[VideoPlayer] 🔄 Starting initialization:');
-      print('  - Video ID: ${widget.video.id}');
-      print('  - Memory status:');
-      print('    • Active controller: ${_controller != null}');
-      print('    • Controller initialized: ${_controller?.value.isInitialized}');
-      print('    • Is mounted: $mounted');
-      print('    • Total active controllers: $_activeControllers');
-      print('    • Is cancelled: $_isCancelled');
-      print('    • Is active: ${widget.isActive}');
-      
-      // Only cleanup if we don't already have an initialized controller
-      if (_controller != null) {
-        print('  - Cleaning up existing controller first');
-        await _cleanupController();
-      }
-
-      // Double check mount and active state
-      if (!mounted || !widget.isActive || _isCancelled) {
-        print('\n[VideoPlayer] ⚠️ Initialization aborted:');
-        print('  - Is mounted: $mounted');
-        print('  - Is active: ${widget.isActive}');
-        print('  - Is cancelled: $_isCancelled');
-        return;
-      }
-
       _incrementControllerCount();
+      _isCancelled = false; // Reset cancellation flag
 
       print('\n[VideoPlayer] 🔍 Fetching video URL...');
       String? videoUrl;
@@ -241,7 +285,6 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
         if (videoUrl == null) {
           print('  ❌ Failed to get video URL');
           _decrementControllerCount();
-          setState(() => _isInitialized = false);
           return;
         }
 
@@ -257,26 +300,42 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       // Add listeners before initialization
       _controller!.addListener(_onControllerUpdate);
 
-      // Initialize without timeout - rely on error handling instead
       print('\n[VideoPlayer] 🎯 Initializing controller...');
-      if (!mounted || !widget.isActive || _isCancelled) {
-        print('  ⚠️ Aborted before initialization:');
-        print('    - Is mounted: $mounted');
-        print('    - Is active: ${widget.isActive}');
-        print('    - Is cancelled: $_isCancelled');
-        _cleanupController();
+      
+      // Initialize with timeout
+      await _controller?.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          throw TimeoutException('Video initialization timed out');
+        },
+      );
+      
+      // For preloaded videos, we want to:
+      // 1. Seek to beginning
+      // 2. Start buffering
+      // 3. Pause immediately
+      // This ensures the video is ready for instant playback
+      if (widget.shouldPreload && !widget.isActive) {
+        print('  🔄 Preparing preloaded video');
+        await _controller?.seekTo(Duration.zero);
+        // Start playback briefly to trigger buffering
+        await _controller?.play();
+        await Future.delayed(const Duration(milliseconds: 100));
+        await _controller?.pause();
+        await _controller?.setVolume(0.0);
+        print('  ✓ Preload preparation complete');
+      }
+
+      if (!mounted || _isCancelled) {
+        print('  ⚠️ Widget unmounted or cancelled during initialization');
+        await _cleanupController(reason: 'Widget unmounted or cancelled');
         return;
       }
 
-      await _controller?.initialize();
-      
-      if (!mounted || !widget.isActive || _isCancelled) {
-        print('  ⚠️ Aborted after initialization:');
-        print('    - Is mounted: $mounted');
-        print('    - Is active: ${widget.isActive}');
-        print('    - Is cancelled: $_isCancelled');
-        _cleanupController();
-        return;
+      // Set controller in CookModeProvider if active
+      if (widget.isActive) {
+        Provider.of<CookModeProvider>(context, listen: false)
+          .setVideoController(_controller);
       }
 
       final value = _controller?.value;
@@ -287,34 +346,25 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       print('  - Is looping: ${value?.isLooping}');
       print('  - Is buffering: ${value?.isBuffering}');
       print('  - Volume: ${value?.volume}');
-      
-      if (!mounted || !widget.isActive || _isCancelled) {
-        _cleanupController();
-        return;
-      }
+      print('  - Position: ${value?.position}');
 
       await _controller?.setLooping(true);
       
-      if (widget.isActive && !_isCancelled) {
+      if (widget.isActive) {
         print('\n[VideoPlayer] ▶️ Starting playback:');
         print('  - Video ID: ${widget.video.id}');
         await _controller?.setVolume(1.0);
         await _controller?.play();
-      } else {
-        print('\n[VideoPlayer] ⚠️ Video inactive or cancelled:');
-        print('  - Is active: ${widget.isActive}');
-        print('  - Is cancelled: $_isCancelled');
-        _cleanupController();
-        return;
       }
 
-      if (mounted && !_isCancelled) {
+      if (mounted) {
         setState(() {
           _isInitialized = true;
           _hasError = false;
           print('\n[VideoPlayer] 🔄 State updated:');
           print('  - Initialized: $_isInitialized');
           print('  - Has error: $_hasError');
+          print('  - Is preloaded: ${widget.shouldPreload}');
         });
       }
     } catch (e, stackTrace) {
@@ -322,15 +372,22 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       print('  - Error: $e');
       print('  - Stack trace: $stackTrace');
       
-      _decrementControllerCount();
+      await _cleanupController(reason: 'Initialization error');
       
-      await _cleanupController();
-      
-      if (mounted && !_isCancelled) {
+      if (mounted) {
         setState(() {
           _isInitialized = false;
           if (_shouldShowErrorToUser(e)) {
             _hasError = true;
+          }
+        });
+      }
+
+      // Only retry if this is the active video and not a timeout
+      if (widget.isActive && !_isCancelled && !(e is TimeoutException)) {
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted && !_isCancelled) {
+            _initializeVideo();
           }
         });
       }
@@ -345,7 +402,7 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       print('[VideoPlayer] ⚠️ Playback error: ${_controller!.value.errorDescription}');
       // Only retry if this is the active video and not cancelled
       if (widget.isActive && !_isCancelled) {
-        _cleanupController();
+        _cleanupController(reason: 'Playback error');
         // Add delay before retrying
         Future.delayed(const Duration(milliseconds: 300), () {
           if (mounted && !_isCancelled) {
@@ -356,57 +413,72 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     }
   }
 
-  Future<void> _cleanupController({bool isTransition = false}) async {
+  Future<void> _cleanupController({String reason = 'Unknown'}) async {
     final oldController = _controller;
+    if (oldController == null) return;
+    
     _controller = null;
-    _isInitialized = false;
     
     try {
       print('\n[VideoPlayer] 🧹 Starting cleanup:');
       print('  - Video ID: ${widget.video.id}');
-      print('  - Cleanup type: ${isTransition ? 'Screen Transition' : 'Normal Flow'}');
-      print('  - Controller exists: ${oldController != null}');
-      print('  - Controller initialized: ${oldController?.value.isInitialized}');
+      print('  - Reason: $reason');
+      print('  - Controller initialized: ${oldController.value.isInitialized}');
       print('  - Current active controllers: $_activeControllers');
-      print('  - Is cancelled: $_isCancelled');
-      print('  - Is mounted: $mounted');
-      print('  - Is active: ${widget.isActive}');
       
-      if (oldController != null) {
-        print('  🔄 Cleaning up controller:');
-        // Stop playback first
-        await oldController.pause();
-        await oldController.setVolume(0.0);
+      // Decrement counter first to ensure accurate tracking
+      _decrementControllerCount();
+      
+      // Stop playback and audio immediately
+      try {
+        await oldController.pause().timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => print('  ⚠️ Pause timed out'),
+        );
+        await oldController.setVolume(0.0).timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => print('  ⚠️ Volume set timed out'),
+        );
         print('    ✓ Playback stopped');
-        
-        // Remove listener
-        oldController.removeListener(_onControllerUpdate);
-        print('    ✓ Listener removed');
-        
-        // Dispose the controller
-        await oldController.dispose();
-        _decrementControllerCount();
-        print('    ✓ Controller disposed');
-
-        print('  📊 Cleanup status:');
-        print('    - Active controllers: $_activeControllers');
-        print('    - Is cancelled: $_isCancelled');
+      } catch (e) {
+        print('  ⚠️ Error stopping playback: $e');
       }
-
-      // Force counter reset during transitions if it's non-zero
-      if (isTransition && _activeControllers > 0) {
-        print('\n  ⚠️ Found lingering controllers during transition:');
-        print('    - Current count: $_activeControllers');
-        print('    - Forcing reset to 0');
+      
+      // Remove listener
+      oldController.removeListener(_onControllerUpdate);
+      print('    ✓ Listener removed');
+      
+      // Clear from CookModeProvider if active
+      if (widget.isActive) {
+        Provider.of<CookModeProvider>(context, listen: false)
+          .setVideoController(null);
+      }
+      
+      // Dispose the controller with timeout
+      try {
+        await oldController.dispose().timeout(
+          const Duration(milliseconds: 500),
+          onTimeout: () => print('  ⚠️ Dispose timed out'),
+        );
+        print('    ✓ Controller disposed');
+      } catch (e) {
+        print('  ⚠️ Error disposing controller: $e');
+        // Force counter reset if we have disposal errors
         _activeControllers = 0;
       }
+      
+      // Reset initialization state
+      _isInitialized = false;
+      if (mounted) setState(() {});
+      
+      print('  📊 Memory cleanup complete:');
+      print('    - Remaining controllers: $_activeControllers');
+      
     } catch (e) {
       print('\n[VideoPlayer] ❌ Error during cleanup:');
       print('  - Error: $e');
-      // Still decrement counter even if cleanup fails
-      if (oldController != null) {
-        _decrementControllerCount();
-      }
+      // Force counter reset on any cleanup error
+      _activeControllers = 0;
     }
   }
 
@@ -418,6 +490,11 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   }
 
   void _togglePlayPause() {
+    // Don't handle taps if cook mode is active
+    if (Provider.of<CookModeProvider>(context, listen: false).isActive) {
+      return;
+    }
+    
     setState(() {
       if (_controller?.value.isPlaying ?? false) {
         _controller?.pause();
@@ -666,88 +743,150 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // Video player
-        GestureDetector(
-          onTap: _togglePlayPause,
-          child: Container(
-            color: Colors.black,
+    final size = MediaQuery.of(context).size;
+    print('Building video player. Screen size: ${size.width} x ${size.height}');
+
+    return Container(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Video Layer
+          Container(
             child: _isInitialized && _controller != null
-                ? AspectRatio(
-                    aspectRatio: _controller!.value.aspectRatio,
-                    child: VideoPlayer(_controller!),
+                ? GestureDetector(
+                    onTap: _togglePlayPause,
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: _controller!.value.aspectRatio,
+                        child: VideoPlayer(_controller!),
+                      ),
+                    ),
                   )
                 : Center(
                     child: _hasError
-                        ? const Icon(
-                            Icons.error_outline,
-                            color: Colors.white54,
-                            size: 36,
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.error_outline,
+                                color: Colors.white.withOpacity(0.6),
+                                size: 48,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Unable to load video',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.8),
+                                  fontSize: 16,
+                                ),
+                              ),
+                              if (widget.isActive) ...[
+                                const SizedBox(height: 16),
+                                TextButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _hasError = false;
+                                      _initializeVideo();
+                                    });
+                                  },
+                                  child: const Text(
+                                    'Retry',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                              ],
+                            ],
                           )
-                        : const CircularProgressIndicator(),
+                        : const CircularProgressIndicator(color: Colors.white),
                   ),
           ),
-        ),
 
-        // Video info overlay at bottom
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: Container(
-            height: MediaQuery.of(context).size.height * 0.25, // Gradient height
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-                colors: [
-                  Colors.black.withOpacity(0.7),
-                  Colors.transparent,
-                ],
-                stops: const [0.0, 1.0],
-              ),
-            ),
-          ),
-        ),
+          // Camera Preview Overlay - Commented out for now
+          // const CameraPreviewOverlay(),
 
-        // Title and description
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: widget.isGameMode 
-              ? MediaQuery.of(context).size.height * 0.5 + 80 // When game is active, position above game
-              : MediaQuery.of(context).viewPadding.bottom + kBottomNavigationBarHeight + 48, // Just above nav bar with some padding
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Title and description
-                Text(
-                  widget.video.title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    shadows: [
-                      Shadow(
-                        blurRadius: 4,
-                        color: Colors.black,
-                        offset: Offset(1, 1),
+          // Cook Mode Indicator
+          Consumer<CookModeProvider>(
+            builder: (context, cookModeProvider, _) {
+              if (!cookModeProvider.isActive) return const SizedBox.shrink();
+              
+              return Positioned(
+                top: 64, // Positioned below game icon
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.touch_app,  // Changed to hand icon
+                        color: Colors.orange,  // Highlighted color
+                        size: 18,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Cook Mode',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ],
                   ),
                 ),
-                if (widget.video.description.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+              );
+            },
+          ),
+
+          // Video info overlay at bottom
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              height: MediaQuery.of(context).size.height * 0.25, // Gradient height
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.7),
+                    Colors.transparent,
+                  ],
+                  stops: const [0.0, 1.0],
+                ),
+              ),
+            ),
+          ),
+
+          // Title and description
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: widget.isGameMode 
+                ? MediaQuery.of(context).size.height * 0.5 + 80 // When game is active, position above game
+                : MediaQuery.of(context).viewPadding.bottom + kBottomNavigationBarHeight + 48, // Just above nav bar with some padding
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Title and description
                   Text(
-                    widget.video.description,
+                    widget.video.title,
                     style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
                       shadows: [
                         Shadow(
                           blurRadius: 4,
@@ -756,52 +895,72 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                         ),
                       ],
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
+                  if (widget.video.description.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      widget.video.description,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                        shadows: [
+                          Shadow(
+                            blurRadius: 4,
+                            color: Colors.black,
+                            offset: Offset(1, 1),
+                          ),
+                        ],
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
+              ),
+            ),
+          ),
+
+          // Interaction buttons on the right
+          Positioned(
+            right: 16,
+            bottom: widget.isGameMode 
+                ? MediaQuery.of(context).size.height * 0.5 + 16 // When game is active, position above game
+                : MediaQuery.of(context).size.height * 0.15, // Adjusted to be closer to the bottom
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Add cook mode button at the top
+                const CookModeButton(),
+                const SizedBox(height: 20),
+                _buildInteractionButton(
+                  icon: _isLiked ? Icons.favorite : Icons.favorite_border,
+                  label: _likeCount.toString(),
+                  color: _isLiked ? Colors.red : Colors.white,
+                  onTap: _handleLike,
+                ),
+                const SizedBox(height: 20),
+                _buildInteractionButton(
+                  icon: Icons.comment,
+                  label: _commentCount.toString(),
+                  onTap: _showComments,
+                ),
+                const SizedBox(height: 20),
+                _buildInteractionButton(
+                  icon: Icons.bookmark_border,
+                  label: 'Save',
+                  onTap: _showBookmarkDialog,
+                ),
+                const SizedBox(height: 20),
+                _buildInteractionButton(
+                  icon: Icons.share,
+                  label: _shareCount.toString(),
+                  onTap: () => _showShareSheet(context),
+                ),
               ],
             ),
           ),
-        ),
-
-        // Interaction buttons on the right
-        Positioned(
-          right: 16,
-          bottom: widget.isGameMode 
-              ? MediaQuery.of(context).size.height * 0.5 + 16 // When game is active, position above game
-              : MediaQuery.of(context).size.height * 0.15, // Adjusted to be closer to the bottom
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildInteractionButton(
-                icon: _isLiked ? Icons.favorite : Icons.favorite_border,
-                label: _likeCount.toString(),
-                color: _isLiked ? Colors.red : Colors.white,
-                onTap: _handleLike,
-              ),
-              const SizedBox(height: 20),
-              _buildInteractionButton(
-                icon: Icons.comment,
-                label: _commentCount.toString(),
-                onTap: _showComments,
-              ),
-              const SizedBox(height: 20),
-              _buildInteractionButton(
-                icon: Icons.bookmark_border,
-                label: 'Save',
-                onTap: _showBookmarkDialog,
-              ),
-              const SizedBox(height: 20),
-              _buildInteractionButton(
-                icon: Icons.share,
-                label: _shareCount.toString(),
-                onTap: () => _showShareSheet(context),
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

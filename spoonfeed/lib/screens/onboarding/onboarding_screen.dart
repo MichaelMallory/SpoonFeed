@@ -15,18 +15,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final List<OnboardingPage> _pages = [
     const OnboardingPage(
       title: 'Welcome to SpoonFeed',
-      description: 'Your go-to platform for discovering and sharing amazing recipes through short-form videos',
+      description: 'Your personal cooking companion that literally spoonfeeds you recipes. No more guesswork - just follow along with our hands-free, AI-powered assistant.',
       icon: Icons.restaurant_menu,
     ),
     const OnboardingPage(
-      title: 'Learn from the Best',
-      description: 'Watch step-by-step cooking videos from professional chefs and passionate home cooks',
-      icon: Icons.school,
+      title: 'Discover & Save',
+      description: 'Explore an endless feed of cooking videos and save your favorites to personal cookbooks. Find inspiration and build your collection of go-to recipes.',
+      icon: Icons.bookmark_border,
     ),
     const OnboardingPage(
-      title: 'Create & Share',
-      description: 'Record and edit your own cooking videos with our powerful AI-assisted tools',
-      icon: Icons.video_camera_back,
+      title: 'Cook Like a Pro',
+      description: 'Our hands-free assistant guides you through each recipe step by step. Just use simple gestures to control playback while cooking!',
+      icon: Icons.gesture,
+    ),
+    const OnboardingPage(
+      title: 'Play & Compete',
+      description: 'Challenge yourself in SpoonSlash - our fun cooking game! Get your comments featured by reaching high scores and joining the community.',
+      icon: Icons.sports_esports,
     ),
   ];
 
@@ -45,7 +50,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void _navigateToAuth() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (context) => const AuthScreen(),
+        builder: (context) => AuthScreen(isFirebaseEnabled: true),
       ),
     );
   }

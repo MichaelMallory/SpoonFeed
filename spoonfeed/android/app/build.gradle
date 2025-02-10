@@ -23,7 +23,7 @@ apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
 
 android {
     namespace "com.reelai.spoonfeed"
-    compileSdkVersion flutter.compileSdkVersion
+    compileSdkVersion 34
     ndkVersion flutter.ndkVersion
 
     compileOptions {
@@ -42,9 +42,9 @@ android {
     defaultConfig {
         applicationId "com.reelai.spoonfeed"
         minSdkVersion 24
-        targetSdkVersion flutter.targetSdkVersion
-        versionCode 2
-        versionName "1.0.0"
+        targetSdkVersion 34
+        versionCode 3
+        versionName "1.0.1"
     }
 
     signingConfigs {
@@ -68,7 +68,7 @@ android {
             
             firebaseAppDistribution {
                 artifactType="APK"
-                releaseNotes="Update fixing Google Sign-In functionality"
+                releaseNotes="Added pinned comments feature: Users can now pin their high score comments to videos"
                 testers="michael.mallory@reelai.com"
             }
         }

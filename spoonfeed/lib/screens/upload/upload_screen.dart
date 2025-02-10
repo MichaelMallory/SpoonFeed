@@ -163,7 +163,7 @@ class _UploadScreenState extends State<UploadScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Upload Recipe Video'),
+        title: const Text('Share a SpoonFul'),
         actions: [
           if (_videoFile != null)
             IconButton(
@@ -209,7 +209,7 @@ class _UploadScreenState extends State<UploadScreen> {
                             children: [
                               Icon(Icons.video_library, size: 64),
                               SizedBox(height: 16),
-                              Text('Tap to select a recipe video'),
+                              Text('Tap to select a video to share'),
                               SizedBox(height: 8),
                               Text(
                                 'Maximum duration: 10 minutes',

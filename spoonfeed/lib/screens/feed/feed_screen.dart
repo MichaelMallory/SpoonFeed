@@ -312,7 +312,7 @@ class _FeedScreenState extends State<FeedScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    'For You',
+                    'Your SpoonFeed',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 16,

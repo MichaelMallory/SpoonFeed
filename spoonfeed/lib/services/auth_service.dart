@@ -6,16 +6,27 @@ import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 
 class AuthService extends ChangeNotifier {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final bool isEnabled;
+  final FirebaseAuth _auth;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
+  final GoogleSignIn _googleSignIn;
   final Logger _logger = Logger();
+  User? _user;
+
+  AuthService({
+    this.isEnabled = true,
+    FirebaseAuth? auth,
+    GoogleSignIn? googleSignIn,
+  }) : _auth = auth ?? FirebaseAuth.instance,
+       _googleSignIn = googleSignIn ?? GoogleSignIn();
 
   // Get current user
-  User? get currentUser => _auth.currentUser;
+  User? get currentUser => _user;
 
   // Stream of auth state changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
+
+  bool get isSignedIn => _user != null;
 
   // Sign up with email and password
   Future<UserModel?> signUpWithEmail({
@@ -234,83 +245,27 @@ class AuthService extends ChangeNotifier {
   }
 
   // Sign in with Google
-  Future<UserModel?> signInWithGoogle() async {
+  Future<UserCredential?> signInWithGoogle() async {
+    if (!isEnabled) {
+      throw Exception('Authentication is not available');
+    }
+
     try {
-      // Trigger the authentication flow
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
       if (googleUser == null) return null;
 
-      // Obtain the auth details from the request
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-      // Create a new credential
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
-      // Sign in to Firebase with the credential
-      final UserCredential result = await _auth.signInWithCredential(credential);
-      final User? user = result.user;
-      if (user == null) throw Exception('Failed to sign in with Google');
-
-      // Check if this is a new user
-      final doc = await _firestore.collection('users').doc(user.uid).get();
-      if (!doc.exists) {
-        // Generate a username from email if display name is not available
-        final baseUsername = user.displayName?.replaceAll(' ', '').toLowerCase() ?? 
-                           user.email?.split('@')[0] ?? 
-                           'user${DateTime.now().millisecondsSinceEpoch}';
-        
-        // Create new user document with proper validation
-        final UserModel newUser = UserModel(
-          uid: user.uid,
-          email: user.email ?? '',
-          username: baseUsername,
-          displayName: user.displayName ?? baseUsername, // Fallback to username if no display name
-          photoUrl: user.photoURL,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
-          isChef: false, // Default value
-          bio: '', // Default empty bio
-          followers: [],
-          following: [],
-          recipes: [],
-        );
-
-        // Use same retry mechanism as email signup
-        int retryCount = 0;
-        const maxRetries = 3;
-        const retryDelay = Duration(milliseconds: 500);
-
-        while (retryCount < maxRetries) {
-          try {
-            await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
-            _logger.i('New user created with Google: ${user.uid}');
-            return newUser;
-          } catch (e) {
-            retryCount++;
-            _logger.w('Attempt $retryCount failed to create user document: $e');
-            
-            if (e is FirebaseException && e.code == 'permission-denied') {
-              _logger.e('Permission denied creating user document. Error: ${e.message}');
-              throw Exception('Permission denied creating user profile. Please try again.');
-            }
-            
-            if (retryCount == maxRetries) {
-              _logger.e('Failed to create user document after $maxRetries attempts');
-              throw Exception('Failed to create user profile. Please try again.');
-            }
-            
-            await Future.delayed(retryDelay);
-          }
-        }
-      }
-
-      _logger.i('User signed in with Google: ${user.uid}');
-      return UserModel.fromFirestore(doc);
+      final userCredential = await _auth.signInWithCredential(credential);
+      _user = userCredential.user;
+      notifyListeners();
+      return userCredential;
     } catch (e) {
-      _logger.e('Error signing in with Google: $e');
+      _logger.e('Google sign in failed: $e');
       rethrow;
     }
   }

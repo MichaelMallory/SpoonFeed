@@ -1,6 +1,6 @@
 buildscript {
     ext {
-        kotlin_version = '1.9.0'
+        kotlin_version = '1.7.10'
         agp_version = '8.1.0'
     }
     repositories {
@@ -31,6 +31,15 @@ subprojects {
         if (project.hasProperty('android')) {
             project.android {
                 namespace project.findProperty('GROUP') ?: "com.arthenica.ffmpegkit.flutter"
+                compileSdkVersion 34
+                defaultConfig {
+                    targetSdkVersion 34
+                    minSdkVersion 24
+                }
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
             }
         }
     }
@@ -57,9 +66,28 @@ subprojects {
             }
         }
     }
+
+    afterEvaluate {project ->
+        if (project.hasProperty('android')) {
+            android {
+                compileSdkVersion 34
+                
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
+            }
+        }
+    }
 }
 
 rootProject.buildDir = '../build'
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(':app')
+}
 
 tasks.register("clean", Delete) {
     delete rootProject.buildDir

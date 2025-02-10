@@ -3,10 +3,52 @@ import '../../services/auth_service.dart';
 import 'package:logger/logger.dart';
 
 class AuthScreen extends StatelessWidget {
-  const AuthScreen({super.key});
+  final bool isFirebaseEnabled;
+
+  const AuthScreen({
+    Key? key,
+    required this.isFirebaseEnabled,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    if (!isFirebaseEnabled) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 64,
+                color: Colors.red,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Firebase Not Available',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  'Authentication is currently unavailable. Please try again later.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pushReplacementNamed('/onboarding');
+                },
+                child: const Text('Go Back'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return DefaultTabController(
       length: 2,
       child: Scaffold(
@@ -95,12 +137,15 @@ class _SignInFormState extends State<SignInForm> {
 
     try {
       final authService = AuthService();
-      final user = await authService.signInWithGoogle();
-      
-      if (!mounted) return;
-      if (user?.displayName == null || user?.bio == null) {
+      final credential = await authService.signInWithGoogle();
+      if (credential == null || credential.user == null) return;
+
+      // Check if user profile is complete
+      if (credential.user!.displayName == null) {
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/profile-setup');
       } else {
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/main');
       }
     } catch (e) {
@@ -349,12 +394,15 @@ class _SignUpFormState extends State<SignUpForm> {
 
     try {
       final authService = AuthService();
-      final user = await authService.signInWithGoogle();
-      
-      if (!mounted) return;
-      if (user?.displayName == null || user?.bio == null) {
+      final credential = await authService.signInWithGoogle();
+      if (credential == null || credential.user == null) return;
+
+      // Check if user profile is complete
+      if (credential.user!.displayName == null) {
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/profile-setup');
       } else {
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/main');
       }
     } catch (e) {

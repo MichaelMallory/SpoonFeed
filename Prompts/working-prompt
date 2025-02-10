@@ -1,6 +1,6 @@
 # Working Prompt
 
-Let's continue working through the implementation guide [Setup](../Project%20Phases/phase-0-setup.md). We are building a TikTok/Capcut clone with a cooking theme as laid out in [Project Overview](../Documentation/project-overview.md) and @cooking-theme.md.
+Let's continue working through the implementation guide . We are building a TikTok/Capcut clone with a cooking theme as laid out in [Project Overview](../Documentation/project-overview.md) and @cooking-theme.md.
 
 ## Guidelines
 - Reuse existing UI components where relevant
