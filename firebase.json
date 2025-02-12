@@ -1,0 +1,9 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "spoonfeed/firestore.indexes.json"
+  },
+  "functions": {
+    "source": "functions"
+  }
+}

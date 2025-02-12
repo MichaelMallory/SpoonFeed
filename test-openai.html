@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test OpenAI API Key</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions-compat.js"></script>
+</head>
+<body>
+    <h2>Test OpenAI API Key</h2>
+    <button onclick="testKey()">Test API Key</button>
+    <div id="result"></div>
+
+    <script>
+        // Initialize Firebase
+        const firebaseConfig = {
+            projectId: "spoonfeed-78597",
+        };
+        firebase.initializeApp(firebaseConfig);
+
+        async function testKey() {
+            const functions = firebase.functions();
+            const testOpenAIKey = functions.httpsCallable('testOpenAIKey');
+            
+            document.getElementById('result').textContent = 'Testing...';
+            
+            try {
+                const result = await testOpenAIKey();
+                document.getElementById('result').textContent = 
+                    `Success! Found ${result.data.models} available models.`;
+            } catch (error) {
+                document.getElementById('result').textContent = 
+                    `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html> 

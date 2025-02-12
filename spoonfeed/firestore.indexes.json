@@ -81,6 +81,92 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "segments",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "metadata.lastAccessed",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "isProcessing",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "metadata.startedProcessing",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "metadata.language",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "metadata.lastAccessed",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "segments.text",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "metadata.lastAccessed",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isProcessing", "order": "ASCENDING" },
+        { "fieldPath": "metadata.completedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "metadata.version", "order": "ASCENDING" },
+        { "fieldPath": "metadata.lastAccessed", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "transcripts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "segments.text",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "isProcessing",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

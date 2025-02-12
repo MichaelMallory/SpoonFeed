@@ -5,6 +5,9 @@ import '../discover/discover_screen.dart';
 import '../upload/upload_screen.dart';
 import '../profile/profile_screen.dart';
 import '../cookbook/cookbook_screen.dart';
+import 'package:flutter/foundation.dart';  // Add for kDebugMode
+import 'package:provider/provider.dart';
+import '../../services/voice_command_service.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -106,10 +109,136 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  Future<void> _showAudioInputInfo(BuildContext context) async {
+    final voiceService = Provider.of<VoiceCommandService>(context, listen: false);
+    final info = await voiceService.getAudioInputInfo();
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Audio Input Information'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (info.containsKey('error'))
+                Text('Error: ${info['error']}',
+                    style: const TextStyle(color: Colors.red))
+              else ...[
+                Text('Device Name: ${info['name'] ?? 'Unknown'}'),
+                Text('Device ID: ${info['id'] ?? 'Unknown'}'),
+                Text('Sample Rate: ${info['sampleRate']} Hz'),
+                Text('Format: ${info['audioFormat']}'),
+                Text('Channels: ${info['channels']}'),
+                Text('Has Permission: ${info['hasPermission']}'),
+                Text('Is Initialized: ${info['isInitialized']}'),
+                Text('Current Level: ${info['currentLevel']?.toStringAsFixed(1) ?? 'Unknown'} dB'),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     print('[MainScreen] Building main screen');
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('SpoonFeed'),
+        actions: [
+          if (kDebugMode) // Only show in debug mode
+            IconButton(
+              icon: const Icon(Icons.bug_report),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Debug Menu'),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.mic),
+                          title: const Text('Test Wake Word'),
+                          onTap: () {
+                            Navigator.of(context).pop(); // Close dialog
+                            Navigator.of(context).pushNamed('/wake-word-test');
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.settings_voice),
+                          title: const Text('Audio Input Info'),
+                          onTap: () {
+                            Navigator.of(context).pop(); // Close dialog
+                            _showAudioInputInfo(context);
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.video_library),
+                          title: const Text('Test Voice Control with Video'),
+                          onTap: () {
+                            Navigator.of(context).pop(); // Close dialog
+                            // TODO: Navigate to a test video with voice control enabled
+                            showDialog(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('Voice Control Test'),
+                                content: const Text(
+                                  'Instructions:\n\n'
+                                  '1. Play any video\n'
+                                  '2. Say "Hey Chef" - video should pause\n'
+                                  '3. Make a request like:\n'
+                                  '   - "go back 10 seconds"\n'
+                                  '   - "skip ahead 30 seconds"\n'
+                                  '   - "pause the video"\n'
+                                  '   - "play"\n'
+                                  '   - "show me the part with the onions"\n\n'
+                                  'The video should respond to your command.'
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.of(context).pop();
+                                      // Enable voice control for the next video played
+                                      final voiceService = Provider.of<VoiceCommandService>(
+                                        context, 
+                                        listen: false
+                                      );
+                                      voiceService.startListeningForWakeWord();
+                                    },
+                                    child: const Text('Start Testing'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                        // Add more debug options here if needed
+                      ],
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Close'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
       extendBody: true, // Allow content to go behind bottom nav
       resizeToAvoidBottomInset: false,
       body: PageStorage(

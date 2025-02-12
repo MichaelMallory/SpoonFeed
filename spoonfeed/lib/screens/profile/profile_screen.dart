@@ -250,6 +250,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 video: video,
                 isActive: index == _currentVideoIndex,
                 shouldPreload: index == _currentVideoIndex + 1 || index == _currentVideoIndex - 1,
+                onRetry: () {
+                  setState(() {
+                    // Force rebuild of the video player
+                    _videos[index] = _videos[index];
+                  });
+                },
               );
             },
           ),
@@ -347,10 +353,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 16),
                     // Stats
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _buildStat('Followers', _user?.followers.length ?? 0),
-                        _buildStat('Following', _user?.following.length ?? 0),
                         _buildStat('Videos', _videos.length),
                       ],
                     ),

@@ -6,13 +6,29 @@ import '../../services/cookbook_service.dart';
 import '../../components/video_card.dart';
 import '../../components/video_player_fullscreen.dart';
 
-class CookbookDetailScreen extends StatelessWidget {
+class CookbookDetailScreen extends StatefulWidget {
   final CookbookModel cookbook;
 
   const CookbookDetailScreen({
     Key? key,
     required this.cookbook,
   }) : super(key: key);
+
+  @override
+  _CookbookDetailScreenState createState() => _CookbookDetailScreenState();
+}
+
+class _CookbookDetailScreenState extends State<CookbookDetailScreen> {
+  late CookbookModel cookbook;
+  late List<VideoModel> videos;
+  int _currentVideoIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    cookbook = widget.cookbook;
+    videos = [];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,7 +80,7 @@ class CookbookDetailScreen extends StatelessWidget {
                     return const Center(child: CircularProgressIndicator());
                   }
 
-                  final videos = snapshot.data!;
+                  videos = snapshot.data!;
                   if (videos.isEmpty) {
                     return const Center(
                       child: Column(
@@ -105,6 +121,10 @@ class CookbookDetailScreen extends StatelessWidget {
                           ),
                         ),
                         onDismissed: (direction) {
+                          final cookbookService = Provider.of<CookbookService>(
+                            context,
+                            listen: false,
+                          );
                           cookbookService.removeVideoFromCookbook(
                             cookbook.id,
                             video.id,
@@ -114,7 +134,7 @@ class CookbookDetailScreen extends StatelessWidget {
                           padding: const EdgeInsets.only(bottom: 16),
                           child: VideoCard(
                             video: video,
-                            onTap: () => _openVideoFullscreen(context, video),
+                            onTap: () => _openVideoFullscreen(context, video, index),
                           ),
                         ),
                       );
@@ -165,7 +185,7 @@ class CookbookDetailScreen extends StatelessWidget {
     }
   }
 
-  void _openVideoFullscreen(BuildContext context, VideoModel video) {
+  void _openVideoFullscreen(BuildContext context, VideoModel video, int index) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => Scaffold(
@@ -174,10 +194,16 @@ class CookbookDetailScreen extends StatelessWidget {
             child: Stack(
               children: [
                 VideoPlayerFullscreen(
+                  key: ValueKey('fullscreen-${video.id}-$index'),
                   video: video,
-                  isActive: true,
-                  shouldPreload: true,
-                  isGameMode: false,
+                  isActive: index == _currentVideoIndex,
+                  shouldPreload: index == _currentVideoIndex + 1 || index == _currentVideoIndex - 1,
+                  onRetry: () {
+                    setState(() {
+                      // Force rebuild of the video player
+                      videos[index] = videos[index];
+                    });
+                  },
                 ),
                 Positioned(
                   top: 16,

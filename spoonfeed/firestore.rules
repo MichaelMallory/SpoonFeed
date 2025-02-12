@@ -89,21 +89,29 @@ service cloud.firestore {
           'createdAt', 'updatedAt', 'views', 'likes', 
           'shares', 'comments', 'resolution'
         ])
-        && video.videoUrl is string && video.videoUrl.size() > 0
         && video.title is string && video.title.size() > 0
         && video.description is string
         && video.duration is number && video.duration > 0
         && video.fileSize is number && video.fileSize > 0
-        && video.status in ['active', 'processing', 'error', 'thumbnail_error']
+        && video.status in ['uploading', 'active', 'processing', 'error', 'thumbnail_error']
+        && video.videoUrl is string  // Just require it to be a string
         && video.userId == request.auth.uid;
       }
 
       allow read: if true;
       allow create: if isAuthenticated() && isValidVideo();
       allow update: if isAuthenticated() 
-        && (resource.data.userId == request.auth.uid
-            || (request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['views', 'likes', 'shares', 'comments', 'status', 'highestGameScore', 'pinnedCommentId', 'lastCommentAt'])));
+        && (
+          // Allow owner to update any fields during upload
+          (resource.data.userId == request.auth.uid && resource.data.status == 'uploading')
+          // Allow owner to update specific fields after upload
+          || (resource.data.userId == request.auth.uid 
+              && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['videoUrl', 'status', 'updatedAt']))
+          // Allow public updates for engagement metrics
+          || request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['views', 'likes', 'shares', 'comments', 'highestGameScore', 'pinnedCommentId', 'lastCommentAt'])
+        );
       allow delete: if isAuthenticated() 
         && resource.data.userId == request.auth.uid;
       
@@ -155,6 +163,39 @@ service cloud.firestore {
     match /game_scores/{userId} {
       allow read: if true;
       allow create, update: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /transcripts/{transcriptId} {
+      function isValidTranscript() {
+        let transcript = request.resource.data;
+        return transcript.keys().hasAll([
+          'segments', 'metadata', 'isProcessing'
+        ])
+        && transcript.segments is list
+        && transcript.metadata.keys().hasAll(['language', 'lastAccessed', 'version'])
+        && transcript.metadata.language is string
+        && transcript.metadata.version is number
+        && transcript.isProcessing is bool
+        && (transcript.segments.size() == 0 || transcript.segments.hasAll([
+          'start', 'end', 'text', 'words'
+        ]));
+      }
+
+      allow read: if true;  // Transcripts are public
+      allow create: if isAuthenticated() 
+        && isValidTranscript()
+        && (request.resource.data.isProcessing == true 
+            || request.auth.token.admin == true);
+      allow update: if isAuthenticated()
+        && isValidTranscript()
+        && (
+          resource.data.isProcessing == true 
+          || request.auth.token.admin == true
+          || (request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['metadata.lastAccessed']))
+        );
+      allow delete: if isAuthenticated()
+        && request.auth.token.admin == true;
     }
   }
 }

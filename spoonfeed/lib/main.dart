@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:logger/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';  // Add for connectivity check
+import 'package:flutter_dotenv/flutter_dotenv.dart';  // Add for .env support
 import 'utils/firebase_config.dart';
 import 'firebase_options.dart';
 import 'screens/onboarding/onboarding_screen.dart';
@@ -24,6 +25,10 @@ import 'services/cook_mode_camera_service.dart';
 import 'services/cook_mode_permission_service.dart';
 import 'services/gesture_recognition_service.dart';
 import 'utils/cook_mode_logger.dart';
+import 'services/voice_command_service.dart';
+import 'providers/voice_control_provider.dart';
+import 'screens/wake_word_test_screen.dart';
+import 'services/video_player_service.dart';
 
 // Initialize logger for debugging with custom printer for emojis
 final logger = Logger(
@@ -36,12 +41,25 @@ final logger = Logger(
   ),
 );
 
+// Add near the top of the file, after imports
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+
 Future<void> main() async {
   await runZonedGuarded(() async {
     logger.i('🚀 Starting SpoonFeed initialization...');
     
     WidgetsFlutterBinding.ensureInitialized();
     logger.i('🎯 Flutter binding initialized');
+
+    // Load .env file
+    try {
+      logger.i('📝 Loading environment variables...');
+      await dotenv.load(fileName: ".env");
+      logger.i('✅ Environment variables loaded successfully');
+    } catch (e) {
+      logger.e('❌ Failed to load environment variables: $e');
+      rethrow;
+    }
 
     late final SharedPreferences prefs;
     bool isFirebaseInitialized = false;
@@ -129,11 +147,28 @@ Future<void> main() async {
             lazy: true,
           ),
           ChangeNotifierProvider(
-            create: (_) => CookModeProvider(
+            create: (_) => VideoPlayerService(),
+          ),
+          ChangeNotifierProxyProvider<VideoPlayerService, VoiceCommandService>(
+            create: (context) => VoiceCommandService(
+              Provider.of<VideoPlayerService>(context, listen: false),
+            ),
+            update: (context, videoService, previous) => 
+              previous ?? VoiceCommandService(videoService),
+          ),
+          ChangeNotifierProvider(
+            create: (context) => VoiceControlProvider(
+              Provider.of<VoiceCommandService>(context, listen: false),
+            ),
+            lazy: false,
+          ),
+          ChangeNotifierProvider(
+            create: (context) => CookModeProvider(
               prefs,
               CookModeCameraService(),
               CookModePermissionService(),
               GestureRecognitionService(),
+              context,
             ),
             lazy: false,
           ),
@@ -151,7 +186,6 @@ Future<void> main() async {
 
 class SpoonFeedApp extends StatelessWidget {
   final bool isFirebaseEnabled;
-  static final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
   
   const SpoonFeedApp({
     super.key,
@@ -188,6 +222,7 @@ class SpoonFeedApp extends StatelessWidget {
         '/profile': (context) => ProfileScreen(userId: FirebaseAuth.instance.currentUser?.uid ?? ''),
         '/main': (context) => const MainScreen(),
         '/upload': (context) => const UploadScreen(),
+        '/wake-word-test': (context) => const WakeWordTestScreen(),
       },
     );
   }

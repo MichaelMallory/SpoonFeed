@@ -9,6 +9,8 @@ import 'package:video_player/video_player.dart';
 import 'dart:async';
 import 'dart:math' show max;
 import '../services/gesture_recognition_service.dart';
+import 'voice_control_provider.dart';
+import 'package:provider/provider.dart';
 
 /// Holds the current motion detection metrics for debugging
 class MotionMetrics {
@@ -38,8 +40,10 @@ class CookModeProvider extends ChangeNotifier {
   final CookModeCameraService _cameraService;
   final CookModePermissionService _permissionService;
   final GestureRecognitionService _gestureService;
+  final BuildContext context;  // Add context to access providers
 
   VideoPlayerController? _videoController;
+  String? _currentVideoId;
   bool _isActive = false;
   bool _isProcessing = false;
   bool _hasPermission = false;
@@ -56,11 +60,16 @@ class CookModeProvider extends ChangeNotifier {
 
   MotionMetrics _motionMetrics = const MotionMetrics();
 
+  // Settings for gesture and voice control
+  bool _gestureControlEnabled = true;
+  bool _voiceControlEnabled = true;
+
   CookModeProvider(
     this._prefs,
     this._cameraService,
     this._permissionService,
     this._gestureService,
+    this.context,  // Add context parameter
   ) {
     _init();
   }
@@ -70,6 +79,8 @@ class CookModeProvider extends ChangeNotifier {
     _isActive = false;
     await _prefs.setBool('cook_mode_active', false);
     _rewindDurationMs = _prefs.getInt('cook_mode_rewind_duration_ms') ?? 10000;
+    _gestureControlEnabled = _prefs.getBool('cook_mode_gesture_enabled') ?? true;
+    _voiceControlEnabled = _prefs.getBool('cook_mode_voice_enabled') ?? true;
     
     CookModeLogger.logCookMode('Initialized', data: {
       'isActive': _isActive,
@@ -101,20 +112,65 @@ class CookModeProvider extends ChangeNotifier {
   // Add getter for motion metrics
   MotionMetrics get motionMetrics => _motionMetrics;
 
-  /// Sets the video controller to control
-  void setVideoController(VideoPlayerController? controller) {
+  // Add getters for new settings
+  bool get gestureControlEnabled => _gestureControlEnabled;
+  bool get voiceControlEnabled => _voiceControlEnabled;
+
+  /// Sets the video controller and ID to control
+  void setVideo(VideoPlayerController? controller, String? videoId) {
     final hadController = _videoController != null;
     _videoController = controller;
+    _currentVideoId = videoId;
+    
+    // Update voice control provider if available
+    if (controller != null && videoId != null) {
+      try {
+        final voiceProvider = _getVoiceControlProvider();
+        if (voiceProvider != null) {
+          voiceProvider.setVideo(controller, videoId);
+        }
+      } catch (e) {
+        CookModeLogger.error('CookMode', 'Failed to update voice control provider', data: {
+          'error': e.toString(),
+        });
+      }
+    }
+
     CookModeLogger.logVideo('Video controller set', data: {
       'hasController': controller != null,
+      'videoId': videoId,
       'previouslyHadController': hadController,
       'isActive': _isActive,
       'isCameraReady': _isCameraReady,
     });
   }
 
+  /// Helper to get voice control provider
+  VoiceControlProvider? _getVoiceControlProvider() {
+    try {
+      return Provider.of<VoiceControlProvider>(context, listen: false);
+    } catch (e) {
+      CookModeLogger.error('CookMode', 'Failed to get voice control provider', data: {
+        'error': e.toString(),
+      });
+      return null;
+    }
+  }
+
   /// Handles gesture detection from camera with smooth rewind animation
   void _handleGesture(GestureResult gesture) {
+    // Debounce gestures
+    final now = DateTime.now();
+    if (_lastGestureTime != null && 
+        now.difference(_lastGestureTime!).inMilliseconds < _gestureDebounceMs) {
+      CookModeLogger.logCookMode('Gesture debounced', data: {
+        'timeSinceLastGesture': now.difference(_lastGestureTime!).inMilliseconds,
+        'debounceThreshold': _gestureDebounceMs,
+      });
+      return;
+    }
+    _lastGestureTime = now;
+
     // Update motion metrics
     _motionMetrics = MotionMetrics(
       activeCells: gesture.activeCells,
@@ -127,60 +183,67 @@ class CookModeProvider extends ChangeNotifier {
     );
     notifyListeners(); // Notify UI to update with new metrics
 
-    CookModeLogger.logCookMode('Gesture received', data: {
-      'gestureDetected': gesture.gestureDetected,
-      'confidence': gesture.confidence,
-      'gestureType': gesture.gestureType.toString(),
-      'activeCells': gesture.activeCells,
-      'maxLuminanceDiff': gesture.maxLuminanceDiff,
-      'averageMotionRatio': gesture.averageMotionRatio,
+    if (!gesture.gestureDetected || !_isActive || !_gestureControlEnabled) {
+      CookModeLogger.logCookMode('Gesture control check failed', data: {
+        'gestureDetected': gesture.gestureDetected,
+        'isActive': _isActive,
+        'gestureControlEnabled': _gestureControlEnabled,
+      });
+      return;
+    }
+
+    CookModeLogger.logCookMode('Processing detected gesture', data: {
+      'isActive': _isActive,
       'hasVideoController': _videoController != null,
       'videoControllerInitialized': _videoController?.value.isInitialized ?? false,
       'isVideoPlaying': _videoController?.value.isPlaying ?? false,
+      'currentPosition': _videoController?.value.position.toString() ?? 'unknown',
+      'gestureControlEnabled': _gestureControlEnabled,
+      'videoId': _currentVideoId,
     });
 
-    if (gesture.gestureDetected) {
-      CookModeLogger.logCookMode('Processing detected gesture', data: {
-        'isActive': _isActive,
-        'hasVideoController': _videoController != null,
-        'videoControllerInitialized': _videoController?.value.isInitialized ?? false,
-        'isVideoPlaying': _videoController?.value.isPlaying ?? false,
-        'currentPosition': _videoController?.value.position.toString() ?? 'unknown',
-      });
+    if (_videoController == null) {
+      CookModeLogger.logVideo('No video controller available');
+      return;
+    }
 
-      if (_videoController != null && _videoController!.value.isInitialized) {
-        final wasPlaying = _videoController!.value.isPlaying;
-        if (wasPlaying) {
-          CookModeLogger.logVideo('Pausing video from gesture');
-          _videoController!.pause().then((_) {
-            CookModeLogger.logVideo('Video paused successfully', data: {
-              'position': _videoController!.value.position.toString(),
-              'isPlaying': _videoController!.value.isPlaying,
-            });
-          }).catchError((error) {
-            CookModeLogger.error('Video', 'Failed to pause video', data: {'error': error.toString()});
-          });
-        } else {
-          CookModeLogger.logVideo('Playing video from gesture with rewind');
-          // Perform rewind before playing
-          _performRewind();
-        }
-      } else {
-        CookModeLogger.error('CookMode', 'Video controller unavailable', data: {
-          'hasController': _videoController != null,
-          'isInitialized': _videoController?.value.isInitialized ?? false,
+    if (!_videoController!.value.isInitialized) {
+      CookModeLogger.logVideo('Video controller not initialized');
+      return;
+    }
+
+    final wasPlaying = _videoController!.value.isPlaying;
+    
+    if (wasPlaying) {
+      // If video is playing, pause it
+      CookModeLogger.logVideo('Pausing video from gesture');
+      _videoController!.pause().then((_) {
+        CookModeLogger.logVideo('Video paused successfully', data: {
+          'position': _videoController!.value.position.toString(),
         });
-      }
+        notifyListeners();
+      }).catchError((error) {
+        CookModeLogger.error('Video', 'Failed to pause video', data: {'error': error.toString()});
+      });
+    } else {
+      // If video is paused, rewind and play
+      CookModeLogger.logVideo('Playing video from gesture with rewind');
+      _performRewind().then((_) {
+        // Play video after rewind
+        _videoController!.play().then((_) {
+          CookModeLogger.logVideo('Video playing after rewind', data: {
+            'position': _videoController!.value.position.toString(),
+          });
+          notifyListeners();
+        });
+      });
     }
   }
 
-  /// Performs a smooth rewind animation
-  void _performRewind() async {
+  /// Performs a smooth rewind animation and returns a Future that completes when done
+  Future<void> _performRewind() async {
     if (_videoController == null) {
-      CookModeLogger.logVideo('Rewind cancelled - no video controller', data: {
-        'isActive': _isActive,
-        'isCameraReady': _isCameraReady,
-      });
+      CookModeLogger.logVideo('Rewind cancelled - no video controller');
       return;
     }
 
@@ -189,73 +252,17 @@ class CookModeProvider extends ChangeNotifier {
       milliseconds: max(0, startPosition.inMilliseconds - _rewindDurationMs),
     );
 
-    CookModeLogger.logVideo('Starting rewind animation', data: {
+    CookModeLogger.logVideo('Starting rewind', data: {
       'startPosition': startPosition.toString(),
       'targetPosition': targetPosition.toString(),
       'rewindDuration': '${_rewindDurationMs}ms',
-      'animationDuration': '${_rewindAnimationMs}ms',
-      'isAtStart': startPosition.inMilliseconds == 0,
-      'videoDuration': _videoController!.value.duration.toString(),
     });
 
-    // Cancel any existing rewind animation
-    if (_rewindAnimationTimer?.isActive ?? false) {
-      CookModeLogger.logVideo('Cancelling existing rewind animation');
-      _rewindAnimationTimer?.cancel();
-    }
-
-    // Calculate number of steps for smooth animation
-    const stepsPerSecond = 30; // 30fps animation
-    final totalSteps = (_rewindAnimationMs / (1000 / stepsPerSecond)).round();
-    final stepDuration = Duration(milliseconds: (1000 / stepsPerSecond).round());
+    // Perform the seek operation
+    await _videoController!.seekTo(targetPosition);
     
-    int currentStep = 0;
-    final startTime = DateTime.now();
-    
-    _rewindAnimationTimer = Timer.periodic(stepDuration, (timer) async {
-      currentStep++;
-      
-      // Safety check - cancel if controller is no longer available
-      if (_videoController == null || !_videoController!.value.isInitialized) {
-        timer.cancel();
-        CookModeLogger.logVideo('Rewind cancelled - controller became unavailable');
-        return;
-      }
-      
-      if (currentStep >= totalSteps) {
-        timer.cancel();
-        await _videoController!.seekTo(targetPosition);
-        await _videoController!.play();
-        final endTime = DateTime.now();
-        CookModeLogger.logVideo('Rewind animation completed', data: {
-          'startPosition': startPosition.toString(),
-          'endPosition': targetPosition.toString(),
-          'actualDuration': endTime.difference(startTime).inMilliseconds,
-          'targetDuration': _rewindAnimationMs,
-          'steps': currentStep,
-          'finalVolume': _videoController!.value.volume,
-          'isPlaying': _videoController!.value.isPlaying,
-        });
-        return;
-      }
-
-      // Calculate intermediate position using ease-out curve
-      final progress = Curves.easeOut.transform(currentStep / totalSteps);
-      final intermediateMs = startPosition.inMilliseconds -
-          (_rewindDurationMs * progress).round();
-      
-      if (currentStep % 5 == 0) { // Log every 5th step to avoid spam
-        CookModeLogger.logVideo('Rewind progress', data: {
-          'step': currentStep,
-          'totalSteps': totalSteps,
-          'progress': progress.toStringAsFixed(2),
-          'position': '${intermediateMs}ms',
-          'elapsedTime': DateTime.now().difference(startTime).inMilliseconds,
-          'isPlaying': _videoController!.value.isPlaying,
-        });
-      }
-      
-      await _videoController!.seekTo(Duration(milliseconds: max(0, intermediateMs)));
+    CookModeLogger.logVideo('Rewind complete', data: {
+      'finalPosition': _videoController!.value.position.toString(),
     });
   }
 
@@ -338,29 +345,41 @@ class CookModeProvider extends ChangeNotifier {
     try {
       if (!_isActive) {
         // Requesting to turn on cook mode
-        if (!_hasPermission) {
+        if (_gestureControlEnabled && !_hasPermission) {
           final granted = await requestPermission(context);
           if (!granted) {
-            throw Exception('Camera permission required for cook mode');
+            throw Exception('Camera permission required for gesture control');
           }
         }
         
-        // Initialize camera
-        await _initializeCamera();
-        
-        // Check lighting conditions
-        final hasGoodLighting = await _cameraService.checkLightingConditions();
-        if (!hasGoodLighting) {
-          CookModeLogger.logCamera('Poor lighting conditions detected');
-          // We'll still continue, but log it for now
-          // Later we can add UI feedback for this
+        // Initialize camera if gesture control is enabled
+        if (_gestureControlEnabled) {
+          await _initializeCamera();
+          await _cameraService.startPreview();
+          _cameraService.setGestureCallback(_handleGesture);
         }
-        
-        // Start camera preview
-        await _cameraService.startPreview();
+
+        // Enable voice control if enabled
+        if (_voiceControlEnabled) {
+          final voiceProvider = _getVoiceControlProvider();
+          if (voiceProvider != null) {
+            voiceProvider.setEnabled(true);
+          }
+        }
       } else {
         // Turning off cook mode
-        await _cameraService.stopPreview();
+        if (_gestureControlEnabled) {
+          await _cameraService.stopPreview();
+          _cameraService.setGestureCallback((_) {});
+        }
+
+        // Disable voice control if it was enabled
+        if (_voiceControlEnabled) {
+          final voiceProvider = _getVoiceControlProvider();
+          if (voiceProvider != null) {
+            voiceProvider.setEnabled(false);
+          }
+        }
       }
       
       _isActive = !_isActive;
@@ -369,6 +388,8 @@ class CookModeProvider extends ChangeNotifier {
         'hasPermission': _hasPermission,
         'isPhoneFlat': _isPhoneFlat,
         'isCameraReady': _isCameraReady,
+        'gestureControlEnabled': _gestureControlEnabled,
+        'voiceControlEnabled': _voiceControlEnabled,
         'error': _error,
       });
       
@@ -434,6 +455,54 @@ class CookModeProvider extends ChangeNotifier {
       'newDuration': milliseconds,
       'isActive': _isActive,
     });
+    notifyListeners();
+  }
+
+  /// Disable gesture control
+  Future<void> _disableGestureControl() async {
+    _gestureControlEnabled = false;
+    if (_cameraService != null) {
+      _cameraService!.setGestureCallback((_) {}); // Empty callback instead of null
+    }
+    notifyListeners();
+  }
+
+  /// Set gesture control enabled state
+  Future<void> setGestureControlEnabled(bool enabled) async {
+    if (_gestureControlEnabled == enabled) return;
+    
+    _gestureControlEnabled = enabled;
+    await _prefs.setBool('cook_mode_gesture_enabled', enabled);
+    
+    // Update gesture service if cook mode is active
+    if (_isActive) {
+      if (enabled) {
+        await _initializeCamera();
+        _cameraService.setGestureCallback(_handleGesture);
+      } else {
+        await _cameraService.stopPreview();
+        _cameraService.setGestureCallback((_) {}); // Empty callback instead of null
+      }
+    }
+    
+    notifyListeners();
+  }
+
+  /// Set voice control enabled state
+  Future<void> setVoiceControlEnabled(bool enabled) async {
+    if (_voiceControlEnabled == enabled) return;
+    
+    _voiceControlEnabled = enabled;
+    await _prefs.setBool('cook_mode_voice_enabled', enabled);
+    
+    // Update voice control if cook mode is active
+    if (_isActive) {
+      final voiceProvider = _getVoiceControlProvider();
+      if (voiceProvider != null) {
+        voiceProvider.setEnabled(enabled);
+      }
+    }
+    
     notifyListeners();
   }
 

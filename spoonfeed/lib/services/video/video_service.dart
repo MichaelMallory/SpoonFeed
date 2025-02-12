@@ -5,12 +5,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:path/path.dart' as path;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:video_compress/video_compress.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 
 import 'video_compression_service.dart';
 import 'video_thumbnail_service.dart';
 import 'video_storage_service.dart';
 import 'video_cache_service.dart';
 import 'video_metadata_service.dart';
+import '../auth_service.dart';
 
 class VideoService {
   // Singleton instance
@@ -28,6 +31,9 @@ class VideoService {
   // Firebase instances
   final _firestore = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
+
+  static const int MAX_CACHE_SIZE_MB = 500; // 500MB max cache
+  static const int MAX_CACHE_AGE_HOURS = 24; // Clear cache entries older than 24 hours
 
   Future<String?> uploadVideo(
     String videoPath,
@@ -67,21 +73,6 @@ class VideoService {
         // Continue without thumbnail
       }
 
-      // Step 3: Upload video
-      print('\n[VideoService] Step 3: Uploading video...');
-      final videoUrl = await _storageService.uploadVideo(
-        compressedVideo.path,
-        onProgress: onProgress,
-        isWeb: isWeb,
-      );
-
-      if (videoUrl == null) {
-        print('[VideoService] ❌ Video upload failed');
-        return null;
-      }
-
-      print('[VideoService] Video URL after upload: $videoUrl');
-
       // Get video duration and metadata
       final videoInfo = await VideoCompress.getMediaInfo(compressedVideo.path);
       var duration = (videoInfo.duration ?? 0).toInt();
@@ -98,20 +89,20 @@ class VideoService {
         return null;
       }
 
-      // Step 4: Save metadata
-      print('\n[VideoService] Step 4: Saving metadata...');
+      // Step 3: Create initial metadata document
+      print('\n[VideoService] Step 3: Creating initial metadata...');
       print('  - Duration: ${duration}ms');
       print('  - File size: ${await compressedVideo.length()} bytes');
       
       // Prepare metadata
       final metadata = {
-        'videoUrl': videoUrl,
+        'videoUrl': '', // Will be updated after upload
         'thumbnailUrl': thumbnailUrl ?? '',
         'title': title,
         'description': description,
         'duration': duration,
         'fileSize': await compressedVideo.length(),
-        'status': 'active',
+        'status': 'uploading', // Mark as uploading initially
         'userId': _auth.currentUser?.uid ?? '',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
@@ -120,8 +111,12 @@ class VideoService {
         'shares': 0,
         'comments': 0,
         'resolution': '${videoInfo.width}x${videoInfo.height}',
-        'originalFileName': path.basename(videoPath),
       };
+
+      print('[VideoService] 📝 Prepared metadata:');
+      metadata.forEach((key, value) {
+        print('  - $key: $value');
+      });
 
       // Validate required fields
       final userId = metadata['userId'] as String?;
@@ -130,11 +125,30 @@ class VideoService {
         return null;
       }
 
-      // Try to save metadata with retry
+      // Create initial document
       String? videoId;
       int retryCount = 0;
       while (retryCount < 3) {
         try {
+          print('[VideoService] 🔄 Attempt ${retryCount + 1} to save metadata');
+          print('[VideoService] 📤 Sending to metadata service:');
+          print('  - videoUrl: ${metadata['videoUrl']}');
+          print('  - thumbnailUrl: ${metadata['thumbnailUrl']}');
+          print('  - title: ${metadata['title']}');
+          print('  - description: ${metadata['description']}');
+          print('  - duration: ${metadata['duration']}');
+          print('  - fileSize: ${metadata['fileSize']}');
+          print('  Additional metadata:');
+          print('    - status: ${metadata['status']}');
+          print('    - userId: ${metadata['userId']}');
+          print('    - createdAt: ${metadata['createdAt']}');
+          print('    - updatedAt: ${metadata['updatedAt']}');
+          print('    - views: ${metadata['views']}');
+          print('    - likes: ${metadata['likes']}');
+          print('    - shares: ${metadata['shares']}');
+          print('    - comments: ${metadata['comments']}');
+          print('    - resolution: ${metadata['resolution']}');
+
           videoId = await _metadataService.saveVideoMetadata(
             videoUrl: metadata['videoUrl'] as String,
             thumbnailUrl: metadata['thumbnailUrl'] as String,
@@ -152,12 +166,13 @@ class VideoService {
               'shares': metadata['shares'],
               'comments': metadata['comments'],
               'resolution': metadata['resolution'],
-              'originalFileName': metadata['originalFileName'],
             },
           );
           if (videoId != null) break;
-        } catch (e) {
-          print('[VideoService] ⚠️ Metadata save attempt ${retryCount + 1} failed: $e');
+        } catch (e, stackTrace) {
+          print('[VideoService] ⚠️ Metadata save attempt ${retryCount + 1} failed:');
+          print('  Error: $e');
+          print('  Stack trace: $stackTrace');
         }
         retryCount++;
         if (retryCount < 3) await Future.delayed(Duration(seconds: retryCount));
@@ -168,11 +183,44 @@ class VideoService {
         return null;
       }
 
-      print('[VideoService] ✅ Metadata saved successfully');
+      print('[VideoService] ✅ Initial metadata saved successfully');
       print('  - Video ID: $videoId');
 
-      // Step 5: Cache video locally
-      print('\n[VideoService] Step 5: Caching video...');
+      // Step 4: Upload video
+      print('\n[VideoService] Step 4: Uploading video...');
+      final videoUrl = await _storageService.uploadVideo(
+        compressedVideo.path,
+        onProgress: onProgress,
+        isWeb: isWeb,
+      );
+
+      if (videoUrl == null) {
+        print('[VideoService] ❌ Video upload failed');
+        // Update status to failed
+        await _metadataService.updateVideoMetadata(videoId, {
+          'status': 'failed',
+          'error': 'Video upload failed'
+        });
+        return null;
+      }
+
+      print('[VideoService] Video URL after upload: $videoUrl');
+
+      // Step 5: Update metadata with video URL
+      print('\n[VideoService] Step 5: Updating metadata with video URL...');
+      final updated = await _metadataService.updateVideoMetadata(videoId, {
+        'videoUrl': videoUrl,
+        'status': 'active',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!updated) {
+        print('[VideoService] ❌ Failed to update metadata with video URL');
+        return null;
+      }
+
+      // Step 6: Cache video locally
+      print('\n[VideoService] Step 6: Caching video...');
       try {
         await _cacheService.cacheVideo(videoUrl, compressedVideo);
       } catch (e) {
@@ -263,42 +311,74 @@ class VideoService {
   }
 
   Future<String?> getCachedVideoPath(String videoUrl) async {
-    return _cacheService.getCachedVideoPath(videoUrl);
-  }
-
-  Future<String?> getVideoUrl(String videoUrl) async {
     try {
-      if (videoUrl.isEmpty) {
-        print('[VideoService] ❌ Empty video URL provided');
-        return null;
-      }
-
-      // If it's already a full URL, validate and return it
-      if (videoUrl.startsWith('http')) {
-        try {
-          final uri = Uri.parse(videoUrl);
-          if (uri.host.contains('firebasestorage.googleapis.com')) {
-            print('[VideoService] ✅ Valid Firebase Storage URL: $videoUrl');
-            return videoUrl;
-          }
-        } catch (e) {
-          print('[VideoService] ❌ Invalid URL format: $e');
+      final cacheDir = await _getCacheDirectory();
+      final videoHash = _generateVideoHash(videoUrl);
+      final cachedFile = File(path.join(cacheDir.path, '$videoHash.mp4'));
+      
+      if (await cachedFile.exists()) {
+        // Check if cache is too old
+        final stat = await cachedFile.stat();
+        final age = DateTime.now().difference(stat.modified);
+        
+        if (age.inHours > MAX_CACHE_AGE_HOURS) {
+          print('[VideoService] 🧹 Removing old cached video: $videoHash');
+          await cachedFile.delete();
           return null;
         }
+        
+        return cachedFile.path;
       }
+      
+      // If not cached, download and cache
+      final response = await http.get(Uri.parse(videoUrl));
+      if (response.statusCode == 200) {
+        // Check cache size before writing
+        await _ensureCacheSize(cacheDir);
+        
+        await cachedFile.writeAsBytes(response.bodyBytes);
+        print('[VideoService] ✅ Video cached successfully: $videoHash');
+        return cachedFile.path;
+      }
+      
+      return null;
+    } catch (e) {
+      print('[VideoService] ❌ Error caching video: $e');
+      return null;
+    }
+  }
 
-      // Get the download URL from Firebase Storage
-      try {
-        final ref = FirebaseStorage.instance.ref().child(videoUrl);
-        final url = await ref.getDownloadURL();
-        print('[VideoService] ✅ Retrieved download URL: $url');
-        return url;
-      } catch (e) {
-        print('[VideoService] ❌ Error getting download URL: $e');
+  Future<String?> getVideoUrl(String videoPath, {String quality = 'high'}) async {
+    try {
+      // Get the video document from Firestore
+      final videoRef = _firestore.doc(videoPath);
+      final videoDoc = await videoRef.get();
+      
+      if (!videoDoc.exists) {
+        print('[VideoService] ❌ Video document not found: $videoPath');
         return null;
       }
+      
+      // Get the appropriate quality URL
+      final urls = videoDoc.data()?['urls'] as Map<String, dynamic>?;
+      if (urls == null) {
+        print('[VideoService] ❌ No URLs found for video: $videoPath');
+        return null;
+      }
+      
+      // Try to get requested quality, fallback to available quality
+      String? url = urls[quality] as String?;
+      if (url == null && quality == 'high') {
+        print('[VideoService] ⚠️ High quality not available, falling back to low');
+        url = urls['low'] as String?;
+      } else if (url == null && quality == 'low') {
+        print('[VideoService] ⚠️ Low quality not available, falling back to high');
+        url = urls['high'] as String?;
+      }
+      
+      return url;
     } catch (e) {
-      print('[VideoService] ❌ Error in getVideoUrl: $e');
+      print('[VideoService] ❌ Error getting video URL: $e');
       return null;
     }
   }
@@ -537,7 +617,7 @@ class VideoService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> loadMoreVideos({
+  Future<QuerySnapshot<Map<String, dynamic>>> loadMoreVideos({
     DocumentSnapshot? lastDocument,
   }) async {
     try {
@@ -558,15 +638,10 @@ class VideoService {
       
       print('[VideoService] ✅ Loaded ${snapshot.docs.length} videos');
 
-      return snapshot.docs
-          .map((doc) => {
-                'id': doc.id,
-                ...doc.data(),
-              })
-          .toList();
+      return snapshot;
     } catch (e) {
       print('[VideoService] ❌ Error loading more videos: $e');
-      return [];
+      throw e;
     }
   }
 
@@ -663,6 +738,88 @@ class VideoService {
           .update({'videoCount': snapshot.count});
     } catch (e) {
       print('[VideoService] Error updating user video count: $e');
+    }
+  }
+
+  Future<Directory> _getCacheDirectory() async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final cacheDir = Directory(path.join(appDir.path, 'video_cache'));
+    
+    if (!await cacheDir.exists()) {
+      await cacheDir.create(recursive: true);
+    }
+    
+    return cacheDir;
+  }
+
+  Future<void> _ensureCacheSize(Directory cacheDir) async {
+    final files = cacheDir.listSync();
+    int totalSize = 0;
+    
+    // Calculate current cache size
+    for (var file in files) {
+      if (file is File) {
+        totalSize += file.lengthSync();
+      }
+    }
+    
+    // If we're over the limit, remove old files
+    if (totalSize > MAX_CACHE_SIZE_MB * 1024 * 1024) {
+      print('[VideoService] ⚠️ Cache size exceeded, cleaning up...');
+      await clearOldCache();
+    }
+  }
+
+  String _generateVideoHash(String url) {
+    // Simple hash function for video URLs
+    var hash = 0;
+    for (var i = 0; i < url.length; i++) {
+      hash = ((hash << 5) - hash) + url.codeUnitAt(i);
+      hash &= hash; // Convert to 32-bit integer
+    }
+    return hash.abs().toString();
+  }
+
+  Future<void> clearOldCache() async {
+    try {
+      final cacheDir = await _getCacheDirectory();
+      final files = cacheDir.listSync();
+      
+      // Sort files by last modified time
+      files.sort((a, b) {
+        final aTime = (a as File).lastModifiedSync();
+        final bTime = (b as File).lastModifiedSync();
+        return aTime.compareTo(bTime);
+      });
+      
+      // Calculate total cache size
+      int totalSize = 0;
+      for (var file in files) {
+        if (file is File) {
+          totalSize += file.lengthSync();
+        }
+      }
+      
+      // Remove old files until we're under the limit
+      for (var file in files) {
+        if (file is File) {
+          final age = DateTime.now().difference(file.lastModifiedSync());
+          final size = file.lengthSync();
+          
+          if (age.inHours > MAX_CACHE_AGE_HOURS || 
+              totalSize > MAX_CACHE_SIZE_MB * 1024 * 1024) {
+            print('[VideoService] 🧹 Removing cached file: ${file.path}');
+            await file.delete();
+            totalSize -= size;
+          }
+          
+          if (totalSize <= MAX_CACHE_SIZE_MB * 1024 * 1024) {
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      print('[VideoService] ❌ Error clearing cache: $e');
     }
   }
 

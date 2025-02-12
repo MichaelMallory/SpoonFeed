@@ -1,7 +1,7 @@
 buildscript {
     ext {
         kotlin_version = '1.7.10'
-        agp_version = '8.1.0'
+        agp_version = '7.3.0'
     }
     repositories {
         google()
@@ -9,7 +9,7 @@ buildscript {
     }
 
     dependencies {
-        classpath "com.android.tools.build:gradle:$agp_version"
+        classpath 'com.android.tools.build:gradle:7.2.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
         // START: FlutterFire Configuration
         classpath 'com.google.gms:google-services:4.3.15'

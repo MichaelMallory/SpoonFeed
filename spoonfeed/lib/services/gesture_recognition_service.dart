@@ -14,7 +14,7 @@ class GestureRecognitionService {
   int _totalFramesProcessed = 0;
   int _maxActiveCells = 0;
   int _maxLuminanceDiff = 0;
-  static const _gestureDebounceMs = 1500; // When to clear fields
+  int _gestureDebounceMs = 1500; // Default gesture timer duration
   static const _frameProcessingIntervalMs = 200; // 5fps
   static const _motionDisplayTimeMs = 2000; // Total lock time
   static const _motionResetThresholdMs = 500; // Time without motion to reset state
@@ -54,6 +54,11 @@ class GestureRecognitionService {
     if (_lastGestureTime == null) return 0;
     final timeSinceGesture = DateTime.now().difference(_lastGestureTime!).inMilliseconds;
     return max(0, _gestureDebounceMs - timeSinceGesture);
+  }
+
+  /// Update the gesture timer duration
+  void updateGestureTimerDuration(int durationMs) {
+    _gestureDebounceMs = durationMs;
   }
 
   /// Processes a camera image frame to detect motion

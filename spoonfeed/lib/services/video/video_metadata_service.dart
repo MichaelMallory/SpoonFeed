@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';  // Add this import for TimeoutException
 
 class VideoMetadataService {
   // Singleton instance
@@ -27,7 +28,23 @@ class VideoMetadataService {
     try {
       final user = _auth.currentUser;
       if (!_validateUser(user)) {
+        print('[VideoMetadataService] ❌ User validation failed');
         return null;
+      }
+
+      print('[VideoMetadataService] 🔍 Validating metadata:');
+      print('  Required fields:');
+      print('    - videoUrl: $videoUrl');
+      print('    - thumbnailUrl: $thumbnailUrl');
+      print('    - title: $title');
+      print('    - description: $description');
+      print('    - duration: $duration');
+      print('    - fileSize: $fileSize');
+      if (additionalMetadata != null) {
+        print('  Additional fields:');
+        additionalMetadata.forEach((key, value) {
+          print('    - $key: $value');
+        });
       }
 
       // Validate input data
@@ -38,17 +55,15 @@ class VideoMetadataService {
         fileSize: fileSize,
         videoUrl: videoUrl,
         thumbnailUrl: thumbnailUrl,
+        additionalMetadata: additionalMetadata,
       )) {
+        print('[VideoMetadataService] ❌ Metadata validation failed');
         return null;
       }
 
-      print('[VideoMetadataService] 💾 Saving video metadata...');
-      print('  - Video URL: $videoUrl');
-      print('  - Title: $title');
-      print('  - User ID: ${user!.uid}');
-
+      print('[VideoMetadataService] 💾 Creating final metadata document...');
       final metadata = _createMetadata(
-        userId: user.uid,
+        userId: user!.uid,
         videoUrl: videoUrl,
         thumbnailUrl: thumbnailUrl,
         title: title,
@@ -58,16 +73,28 @@ class VideoMetadataService {
         additionalMetadata: additionalMetadata,
       );
 
+      print('[VideoMetadataService] 📝 Final metadata structure:');
+      metadata.forEach((key, value) {
+        print('  - $key: $value');
+      });
+
+      print('[VideoMetadataService] 🚀 Attempting to save to Firestore...');
       final docRef = await _firestore
           .collection('videos')
-          .add(metadata);
+          .add(metadata)
+          .timeout(Duration(seconds: 10), onTimeout: () {
+            print('[VideoMetadataService] ⚠️ Firestore save timed out');
+            throw TimeoutException('Firestore save operation timed out');
+          });
 
       print('[VideoMetadataService] ✅ Metadata saved successfully');
       print('  - Document ID: ${docRef.id}');
 
       return docRef.id;
     } catch (e, stackTrace) {
-      _logError(e, stackTrace);
+      print('[VideoMetadataService] ❌ Error saving metadata:');
+      print('  Error: $e');
+      print('  Stack trace: $stackTrace');
       return null;
     }
   }
@@ -113,6 +140,7 @@ class VideoMetadataService {
             fileSize: metadata['fileSize'],
             videoUrl: metadata['videoUrl'],
             thumbnailUrl: metadata['thumbnailUrl'],
+            additionalMetadata: metadata['additionalMetadata'],
           )) {
             results.add(null);
             continue;
@@ -183,6 +211,7 @@ class VideoMetadataService {
         fileSize: data['fileSize'],
         videoUrl: data['videoUrl'],
         thumbnailUrl: data['thumbnailUrl'],
+        additionalMetadata: data['additionalMetadata'],
       )) {
         print('[VideoMetadataService] ❌ Retrieved metadata is invalid');
         return null;
@@ -234,6 +263,7 @@ class VideoMetadataService {
             fileSize: data['fileSize'],
             videoUrl: data['videoUrl'],
             thumbnailUrl: data['thumbnailUrl'],
+            additionalMetadata: data['additionalMetadata'],
           )) {
             results.add(data);
           }
@@ -452,7 +482,8 @@ class VideoMetadataService {
     required int fileSize,
     Map<String, dynamic>? additionalMetadata,
   }) {
-    return {
+    // Create base metadata without a default status
+    final baseMetadata = {
       'userId': userId,
       'videoUrl': videoUrl,
       'thumbnailUrl': thumbnailUrl,
@@ -464,7 +495,15 @@ class VideoMetadataService {
       'updatedAt': FieldValue.serverTimestamp(),
       'views': 0,
       'likes': 0,
-      'status': 'active',
+    };
+
+    // If no status is provided in additionalMetadata, default to 'active'
+    if (additionalMetadata?.containsKey('status') != true) {
+      baseMetadata['status'] = 'active';
+    }
+
+    return {
+      ...baseMetadata,
       ...?additionalMetadata,
     };
   }
@@ -476,13 +515,15 @@ class VideoMetadataService {
     required int fileSize,
     required String videoUrl,
     required String thumbnailUrl,
+    Map<String, dynamic>? additionalMetadata,
   }) {
+    final status = additionalMetadata?['status'] as String? ?? 'active';
     return _validateTitle(title) &&
            _validateDescription(description) &&
            _validateDuration(duration) &&
            _validateFileSize(fileSize) &&
-           _validateUrl(videoUrl) &&
-           _validateUrl(thumbnailUrl);
+           _validateUrl(videoUrl, status) &&
+           _validateUrl(thumbnailUrl, status);
   }
 
   bool _validateUpdateData(Map<String, dynamic> updates) {
@@ -529,8 +570,18 @@ class VideoMetadataService {
     return true;
   }
 
-  bool _validateUrl(String url) {
-    if (url.isEmpty) return false;
+  bool _validateUrl(String url, [String status = 'active']) {
+    // Allow empty videoUrl during upload
+    if (status == 'uploading' && url.isEmpty) {
+      print('[VideoMetadataService] ℹ️ Empty URL allowed during upload');
+      return true;
+    }
+    
+    if (url.isEmpty) {
+      print('[VideoMetadataService] ❌ Empty URL not allowed for status: $status');
+      return false;
+    }
+    
     try {
       final uri = Uri.parse(url);
       return uri.isAbsolute;

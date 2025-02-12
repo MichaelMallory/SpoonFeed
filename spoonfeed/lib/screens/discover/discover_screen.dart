@@ -185,6 +185,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 video: video,
                 isActive: index == _currentVideoIndex,
                 shouldPreload: index == _currentVideoIndex + 1 || index == _currentVideoIndex - 1,
+                onRetry: () {
+                  setState(() {
+                    // Force rebuild of the video player
+                    _videos[index] = _videos[index];
+                  });
+                },
               );
             },
           ),

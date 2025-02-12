@@ -240,16 +240,7 @@ class _SpoonSlashGameWidgetState extends State<SpoonSlashGameWidget> {
           child: GameWidget(
             game: game,
             backgroundBuilder: (context) => Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.indigo.shade900.withOpacity(0.7),
-                    Colors.purple.shade900.withOpacity(0.7),
-                  ],
-                ),
-              ),
+              color: Colors.transparent,
             ),
           ),
         ),

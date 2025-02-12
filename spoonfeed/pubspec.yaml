@@ -35,9 +35,16 @@ dependencies:
   firebase_core: ^2.25.4
   firebase_auth: ^4.17.4
   cloud_firestore: ^4.15.4
+  cloud_functions: ^4.6.5  # Add for Firebase Functions
   firebase_storage: ^11.6.5
   google_sign_in: ^6.2.1
-  connectivity_plus: ^5.0.2  # Add for connectivity checking
+  connectivity_plus: ^5.0.2  # For network connectivity detection
+  record: ^5.0.4  # Add for voice recording capabilities
+  
+  # Voice Recognition
+  picovoice_flutter: ^3.0.4  # Base Picovoice package
+  porcupine_flutter: ^3.0.4  # Porcupine wake word detection
+  speech_to_text: ^6.5.1     # Speech recognition
 
   # Media
   image_picker: ^1.0.7
@@ -135,3 +142,4 @@ flutter:
     - .env
     - assets/images/google_logo.png
     - assets/icons/
+    - assets/keywords/    # Add Picovoice wake word models

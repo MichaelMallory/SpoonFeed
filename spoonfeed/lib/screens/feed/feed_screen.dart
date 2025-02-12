@@ -8,6 +8,8 @@ import '../../components/spoon_slash_game_widget.dart';
 import '../../models/video_model.dart';
 import '../../services/video/video_service.dart';
 import '../../services/game_service.dart';
+import '../../utils/texture_painter.dart';
+import 'dart:async';
 
 class FeedScreen extends StatefulWidget {
   const FeedScreen({Key? key}) : super(key: key);
@@ -26,6 +28,8 @@ class _FeedScreenState extends State<FeedScreen> {
   int _currentVideoIndex = 0;
   bool _isDragging = false;
   double _dragStartY = 0;
+  bool _isInitialLoadComplete = false;
+  Timer? _preloadTimer;
 
   @override
   void initState() {
@@ -35,17 +39,53 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   void dispose() {
+    _preloadTimer?.cancel();
     _pageController.dispose();
     super.dispose();
   }
 
   Future<void> _loadInitialVideos() async {
-    if (_isLoadingMore) return;
+    if (_isLoadingMore) {
+      print('[FeedScreen] 🚫 Skipping initial load - already loading');
+      return;
+    }
     setState(() => _isLoadingMore = true);
 
     try {
-      final docs = await _videoService.loadMoreVideos();
-      if (docs.isEmpty) {
+      print('[FeedScreen] 🎬 Loading initial videos...');
+      print('  - Current video count: ${_videos.length}');
+      print('  - Has more videos: $_hasMoreVideos');
+      
+      final QuerySnapshot<Map<String, dynamic>> snapshot = await _videoService.loadMoreVideos();
+      
+      if (snapshot.docs.isEmpty) {
+        print('[FeedScreen] ℹ️ No videos found in initial load');
+        setState(() {
+          _hasMoreVideos = false;
+          _isLoadingMore = false;
+        });
+        return;
+      }
+
+      print('[FeedScreen] ✅ Loaded ${snapshot.docs.length} initial videos');
+      final List<VideoModel> videos = [];
+      
+      for (final doc in snapshot.docs) {
+        try {
+          final video = VideoModel.fromFirestore(doc);
+          videos.add(video);
+          print('  ✓ Parsed video: ${video.id} - ${video.title}');
+        } catch (e) {
+          print('  ⚠️ Error parsing video:');
+          print('    - Document ID: ${doc.id}');
+          print('    - Error: $e');
+        }
+      }
+      
+      print('[FeedScreen] 📱 Successfully parsed ${videos.length} valid videos');
+      
+      if (videos.isEmpty) {
+        print('[FeedScreen] ⚠️ No valid videos after parsing');
         setState(() {
           _hasMoreVideos = false;
           _isLoadingMore = false;
@@ -54,28 +94,62 @@ class _FeedScreenState extends State<FeedScreen> {
       }
 
       setState(() {
-        _videos.clear(); // Clear existing videos
-        _videos.addAll(docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
-        _lastDocument = docs.isNotEmpty ? docs.last['id'] : null;
+        _videos.clear();
+        _videos.addAll(videos);
+        _lastDocument = snapshot.docs.last;
         _isLoadingMore = false;
+        _isInitialLoadComplete = true;
       });
-    } catch (e) {
-      print('[FeedScreen] ❌ Error loading initial videos: $e');
-      setState(() => _isLoadingMore = false);
+
+      print('[FeedScreen] 🔄 Updated state:');
+      print('  - Video count: ${_videos.length}');
+      print('  - Last document ID: ${_lastDocument?.id}');
+
+      // Preload the first few videos with a longer delay to ensure UI is ready
+      if (videos.isNotEmpty) {
+        _preloadTimer?.cancel();
+        _preloadTimer = Timer(const Duration(milliseconds: 300), () {
+          if (mounted) {
+            print('[FeedScreen] 🎯 Triggering preload for initial videos');
+            setState(() {}); // Trigger rebuild to start preloading
+          }
+        });
+      }
+    } catch (e, stackTrace) {
+      print('[FeedScreen] ❌ Error loading initial videos:');
+      print('  - Error: $e');
+      print('  - Stack trace: $stackTrace');
+      if (mounted) {
+        setState(() {
+          _isLoadingMore = false;
+          _hasMoreVideos = false;
+        });
+      }
     }
   }
 
   Future<void> _loadMoreVideos() async {
-    if (_isLoadingMore || !_hasMoreVideos) return;
+    if (_isLoadingMore || !_hasMoreVideos || _lastDocument == null) {
+      print('[FeedScreen] ℹ️ Skipping loadMoreVideos:');
+      print('  - isLoadingMore: $_isLoadingMore');
+      print('  - hasMoreVideos: $_hasMoreVideos');
+      print('  - hasLastDocument: ${_lastDocument != null}');
+      return;
+    }
 
     setState(() => _isLoadingMore = true);
 
     try {
-      final docs = await _videoService.loadMoreVideos(
+      print('[FeedScreen] 🎬 Loading more videos...');
+      print('  - Current video count: ${_videos.length}');
+      print('  - Last document ID: ${_lastDocument?.id}');
+
+      final QuerySnapshot<Map<String, dynamic>> snapshot = await _videoService.loadMoreVideos(
         lastDocument: _lastDocument,
       );
 
-      if (docs.isEmpty) {
+      if (snapshot.docs.isEmpty) {
+        print('[FeedScreen] ℹ️ No more videos available');
         setState(() {
           _hasMoreVideos = false;
           _isLoadingMore = false;
@@ -83,39 +157,117 @@ class _FeedScreenState extends State<FeedScreen> {
         return;
       }
 
-      // Check for duplicates before adding
-      final newVideos = docs.map((doc) => VideoModel.fromFirestore(doc)).where((video) {
-        return !_videos.any((existing) => existing.id == video.id);
-      }).toList();
+      final List<VideoModel> newVideos = [];
+      for (final doc in snapshot.docs) {
+        try {
+          final video = VideoModel.fromFirestore(doc);
+          // Check for duplicates
+          if (!_videos.any((existing) => existing.id == video.id)) {
+            newVideos.add(video);
+            print('  ✓ Added new video: ${video.id} - ${video.title}');
+          } else {
+            print('  ⚠️ Skipped duplicate video: ${video.id}');
+          }
+        } catch (e) {
+          print('  ❌ Error parsing video:');
+          print('    - Document ID: ${doc.id}');
+          print('    - Error: $e');
+        }
+      }
+
+      print('[FeedScreen] ✅ Found ${newVideos.length} new valid videos');
 
       if (newVideos.isNotEmpty) {
         setState(() {
           _videos.addAll(newVideos);
-          _lastDocument = docs.last['id'];
+          _lastDocument = snapshot.docs.last;
+          _isLoadingMore = false;
+        });
+
+        print('[FeedScreen] 🔄 Updated state:');
+        print('  - Total videos: ${_videos.length}');
+        print('  - New last document ID: ${_lastDocument?.id}');
+
+        // Trigger preload for new videos with a small delay
+        _preloadTimer?.cancel();
+        _preloadTimer = Timer(const Duration(milliseconds: 100), () {
+          if (mounted) {
+            print('[FeedScreen] 🎯 Triggering preload for new videos');
+            setState(() {}); // Trigger rebuild to start preloading
+          }
         });
       } else {
-        _hasMoreVideos = false;
+        print('[FeedScreen] ℹ️ No new valid videos to add');
+        setState(() {
+          _hasMoreVideos = snapshot.docs.length >= 10; // Assuming batch size of 10
+          _isLoadingMore = false;
+        });
       }
+    } catch (e, stackTrace) {
+      print('[FeedScreen] ❌ Error loading more videos:');
+      print('  - Error: $e');
+      print('  - Stack trace: $stackTrace');
+      if (mounted) {
+        setState(() => _isLoadingMore = false);
+      }
+    }
+  }
 
-      setState(() => _isLoadingMore = false);
-    } catch (e) {
-      print('[FeedScreen] ❌ Error loading more videos: $e');
-      setState(() => _isLoadingMore = false);
+  void _verifyPreloadedVideos() {
+    print('\n[FeedScreen] 🔍 Verifying preloaded videos:');
+    print('  - Current index: $_currentVideoIndex');
+    
+    // Check next two videos
+    for (int i = 1; i <= 2; i++) {
+      final nextIndex = _currentVideoIndex + i;
+      if (nextIndex < _videos.length) {
+        print('  - Checking next video $i (index $nextIndex)');
+        if (_shouldPreloadVideo(nextIndex)) {
+          // Force a rebuild of this video to ensure it starts preloading
+          setState(() {});
+        }
+      }
     }
   }
 
   void _onPageChanged(int index) {
+    if (!mounted) return;
+    
+    print('\n[FeedScreen] 📄 Page changed:');
+    print('  - Previous index: $_currentVideoIndex');
+    print('  - New index: $index');
+    print('  - Total videos: ${_videos.length}');
+    print('  - Has more videos: $_hasMoreVideos');
+    print('  - Is loading more: $_isLoadingMore');
+    
     setState(() => _currentVideoIndex = index);
     
-    // Update current video context in GameService
-    final gameService = Provider.of<GameService>(context, listen: false);
-    final video = _videos[index];
-    gameService.setCurrentVideo(video);
+    // Verify preloading of upcoming videos
+    _verifyPreloadedVideos();
     
-    // Load more videos when user reaches near the end
+    // Load more videos when approaching the end
     if (_hasMoreVideos && index >= _videos.length - 3) {
+      print('  ⚡ Triggering load more videos (index near end)');
       _loadMoreVideos();
     }
+  }
+
+  bool _shouldPreloadVideo(int index) {
+    // Prioritize next videos over previous ones
+    // Always preload next 2 videos, and only 1 previous video
+    final shouldPreload = (index > _currentVideoIndex - 2 && index < _currentVideoIndex + 3) &&
+           index != _currentVideoIndex &&
+           index >= 0 &&
+           index < _videos.length;
+           
+    print('[FeedScreen] 🔍 Preload check for index $index:');
+    print('  - Current index: $_currentVideoIndex');
+    print('  - Should preload: $shouldPreload');
+    if (shouldPreload) {
+      print('  - Priority: ${index > _currentVideoIndex ? "High (upcoming)" : "Low (previous)"}');
+    }
+    
+    return shouldPreload;
   }
 
   void _handleDragStart(DragStartDetails details) {
@@ -150,6 +302,99 @@ class _FeedScreenState extends State<FeedScreen> {
     _isDragging = false;
   }
 
+  Future<void> _retryVideo(int index) async {
+    print('\n[FeedScreen] 🔄 Retrying video at index $index');
+    print('  - Current video count: ${_videos.length}');
+    
+    if (index < 0 || index >= _videos.length) {
+      print('  ❌ Invalid index for retry');
+      return;
+    }
+
+    final targetVideo = _videos[index];
+    print('  - Target video ID: ${targetVideo.id}');
+
+    setState(() {
+      _isLoadingMore = true;
+      _videos.clear(); // Clear all videos
+      _currentVideoIndex = 0;
+      _lastDocument = null;
+      _hasMoreVideos = true;
+    });
+
+    try {
+      // Load videos around the target video
+      final snapshot = await _videoService.loadMoreVideos();
+
+      if (snapshot.docs.isEmpty) {
+        print('  ❌ No videos found in retry attempt');
+        setState(() {
+          _isLoadingMore = false;
+          _hasMoreVideos = false;
+        });
+        return;
+      }
+
+      // Find the target video in the new snapshot
+      int targetIndex = snapshot.docs.indexWhere((doc) => doc.id == targetVideo.id);
+      if (targetIndex == -1) {
+        print('  ⚠️ Target video not found in new data');
+        targetIndex = 0;
+      }
+
+      // Calculate the range of videos to load
+      int startIndex = (targetIndex - 2).clamp(0, snapshot.docs.length - 1);
+      int endIndex = (targetIndex + 2).clamp(0, snapshot.docs.length - 1);
+
+      print('  📊 Loading video range:');
+      print('    - Start index: $startIndex');
+      print('    - Target index: $targetIndex');
+      print('    - End index: $endIndex');
+
+      final videosToLoad = snapshot.docs.sublist(startIndex, endIndex + 1);
+      final List<VideoModel> newVideos = [];
+
+      for (final doc in videosToLoad) {
+        try {
+          final video = VideoModel.fromFirestore(doc);
+          newVideos.add(video);
+          print('    ✓ Loaded video: ${video.id}');
+        } catch (e) {
+          print('    ❌ Error parsing video: ${doc.id}');
+          print('      Error: $e');
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _videos.clear();
+          _videos.addAll(newVideos);
+          _lastDocument = snapshot.docs.last;
+          _currentVideoIndex = newVideos.indexWhere((v) => v.id == targetVideo.id);
+          if (_currentVideoIndex == -1) _currentVideoIndex = 0;
+          _isLoadingMore = false;
+          _hasMoreVideos = snapshot.docs.length > endIndex;
+        });
+
+        // Jump to the target video
+        _pageController.jumpToPage(_currentVideoIndex);
+        
+        print('\n[FeedScreen] ✅ Retry completed:');
+        print('  - Loaded ${newVideos.length} videos');
+        print('  - Current index: $_currentVideoIndex');
+        print('  - Has more videos: $_hasMoreVideos');
+      }
+    } catch (e) {
+      print('  ❌ Error during retry: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingMore = false;
+          _hasMoreVideos = false;
+        });
+      }
+    }
+  }
+
   Widget _buildGameDots(BuildContext context, GameService gameService) {
     return GestureDetector(
       onTap: () => gameService.toggleGameMode(),
@@ -170,86 +415,140 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    print('[FeedScreen] Building feed screen');
-    final screenSize = MediaQuery.of(context).size;
-    print('[FeedScreen] Screen size: ${screenSize.width} x ${screenSize.height}');
-    
-    if (_videos.isEmpty && !_isLoadingMore) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
+    print('\n[FeedScreen] 🏗️ Building feed screen:');
+    print('  - Initial load complete: $_isInitialLoadComplete');
+    print('  - Video count: ${_videos.length}');
+    print('  - Current index: $_currentVideoIndex');
+    print('  - Is loading more: $_isLoadingMore');
+
+    // Verify preloaded videos on each build
+    if (_isInitialLoadComplete && _videos.isNotEmpty) {
+      _verifyPreloadedVideos();
+    }
+
+    if (!_isInitialLoadComplete) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
       );
     }
 
-    return Container(
-      color: Colors.black,
-      child: Stack(
+    // Add empty state handling with retry
+    if (_videos.isEmpty) {
+      print('[FeedScreen] ⚠️ No videos available, showing empty state');
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.video_library_outlined,
+                color: Colors.white.withOpacity(0.6),
+                size: 64,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No videos available',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.8),
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  print('[FeedScreen] 🔄 Retrying video load');
+                  setState(() {
+                    _hasMoreVideos = true;
+                    _lastDocument = null;
+                    _isInitialLoadComplete = false;
+                  });
+                  _loadInitialVideos();
+                },
+                child: const Text(
+                  'Retry',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
         children: [
-          // Video feed layer
-          Consumer<GameService>(
-            builder: (context, gameService, child) {
-              final isGameActive = gameService.isGameModeActive;
-              print('[FeedScreen] Game active: $isGameActive');
-              
-              // Set initial video context if not set
-              if (_videos.isNotEmpty && gameService.currentVideoId == null) {
-                gameService.setCurrentVideo(_videos[_currentVideoIndex]);
-              }
-              
-              return SizedBox.expand(
-                child: Column(
-                  children: [
-                    // Video section - full height or half height depending on game state
-                    Expanded(
-                      flex: isGameActive ? 1 : 2,  // Take half space when game active, full space otherwise
-                      child: GestureDetector(
-                        // Only handle vertical drags that start in the top half during game mode
-                        onVerticalDragStart: (details) {
-                          if (!isGameActive || details.localPosition.dy < screenSize.height / 2) {
-                            // Allow the drag to start if not in game mode, or if in game mode and in top half
-                            _handleDragStart(details);
-                          }
-                        },
-                        onVerticalDragUpdate: (details) {
-                          if (_isDragging) {
-                            _handleDragUpdate(details);
-                          }
-                        },
-                        onVerticalDragEnd: (details) {
-                          if (_isDragging) {
-                            _handleDragEnd(details);
-                          }
-                        },
-                        child: PageView.builder(
-                          scrollDirection: Axis.vertical,
-                          controller: _pageController,
-                          onPageChanged: _onPageChanged,
-                          // Always use NeverScrollableScrollPhysics since we're handling gestures manually
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: _videos.length,
-                          itemBuilder: (context, index) {
-                            print('[FeedScreen] Building video item $index');
-                            final video = _videos[index];
-                            return VideoPlayerFullscreen(
-                              key: ValueKey(video.id),
-                              video: video,
-                              isActive: index == _currentVideoIndex,
-                              shouldPreload: index == _currentVideoIndex + 1 || index == _currentVideoIndex - 1,
-                              isGameMode: isGameActive,
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    // Add placeholder for game area when game is active
-                    if (isGameActive)
-                      const Expanded(
-                        flex: 1,
-                        child: SizedBox(), // Transparent placeholder
-                      ),
-                  ],
+          // Main content
+          PageView.builder(
+            scrollDirection: Axis.vertical,
+            controller: _pageController,
+            onPageChanged: _onPageChanged,
+            physics: const BouncingScrollPhysics(),
+            itemCount: _videos.length,
+            itemBuilder: (context, index) {
+              if (index >= _videos.length) return const SizedBox.shrink();
+              final video = _videos[index];
+              return Container(
+                key: ValueKey(video.id),
+                child: VideoPlayerFullscreen(
+                  video: video,
+                  isActive: index == _currentVideoIndex,
+                  shouldPreload: _shouldPreloadVideo(index),
+                  isGameMode: Provider.of<GameService>(context).isGameModeActive,
+                  onRetry: () => _retryVideo(index),
                 ),
               );
             },
+          ),
+
+          // SafeArea overlay content
+          SafeArea(
+            child: Stack(
+              children: [
+                // Loading indicator at bottom when loading more
+                if (_isLoadingMore)
+                  const Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 16,
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                  ),
+
+                // Header with title
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                  color: Colors.black.withOpacity(0.2),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Your SpoonFeed',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Consumer<GameService>(
+                        builder: (context, gameService, child) {
+                          print('[FeedScreen] Building game dots, isActive: ${gameService.isGameModeActive}');
+                          return _buildGameDots(context, gameService);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
 
           // Game layer - Must be last in stack to be on top
@@ -262,78 +561,37 @@ class _FeedScreenState extends State<FeedScreen> {
               
               return Stack(
                 children: [
-                  // Purple background - bottom half only
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: gameHeight,
+                  // Fixed game area container
+                  Align(
+                    alignment: Alignment.bottomCenter,
                     child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.purple.withOpacity(0.6),
-                            Colors.purple.withOpacity(0.8),
-                          ],
-                        ),
+                      height: gameHeight,
+                      width: screenSize.width,
+                      child: Stack(
+                        children: [
+                          // Game board texture background
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: WoodTexturePainter(),
+                            ),
+                          ),
+                          // Game widget on top of texture
+                          Positioned.fill(
+                            child: SpoonSlashGameWidget(
+                              onScoreChanged: (score) {
+                                final gameService = Provider.of<GameService>(context, listen: false);
+                                gameService.updateScore(score);
+                                print('[FeedScreen] Game score updated: $score');
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ),
-                  // Game container - full screen for movement
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: gameHeight,
-                    child: SpoonSlashGameWidget(
-                      onScoreChanged: (score) {
-                        // Update GameService with the new score
-                        final gameService = Provider.of<GameService>(context, listen: false);
-                        gameService.updateScore(score);
-                        print('[FeedScreen] Game score updated: $score');
-                      },
                     ),
                   ),
                 ],
               );
             },
-          ),
-
-          // UI Overlay elements
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    'Your SpoonFeed',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Game toggle button
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            right: 12,
-            child: Consumer<GameService>(
-              builder: (context, gameService, child) {
-                print('[FeedScreen] Building game dots, isActive: ${gameService.isGameModeActive}');
-                return _buildGameDots(context, gameService);
-              },
-            ),
           ),
         ],
       ),

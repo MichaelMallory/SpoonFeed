@@ -170,63 +170,99 @@ class _CookModeSettings extends StatelessWidget {
         color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Cook Mode Settings',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Rewind Duration',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'When resuming video playback, rewind by this many seconds to catch up on missed steps.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).textTheme.bodySmall?.color,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Cook Mode Settings',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
-          StatefulBuilder(
-            builder: (context, setState) {
-              final duration = provider.rewindDurationMs / 1000;
-              return Column(
-                children: [
-                  Slider(
-                    value: duration,
-                    min: 1,
-                    max: 10,
-                    divisions: 9,
-                    label: '${duration.round()} seconds',
-                    onChanged: (value) {
-                      provider.setRewindDuration((value * 1000).round());
-                      setState(() {});
-                    },
-                  ),
-                  Text(
-                    '${duration.round()} seconds',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 24),
-          // Add more settings here in the future
-        ],
+            const SizedBox(height: 24),
+            
+            // Control Mode Toggles
+            Text(
+              'Control Methods',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            StatefulBuilder(
+              builder: (context, setState) {
+                return Column(
+                  children: [
+                    SwitchListTile(
+                      title: const Text('Gesture Control'),
+                      subtitle: const Text('Control video with hand gestures'),
+                      value: provider.gestureControlEnabled,
+                      onChanged: (value) {
+                        provider.setGestureControlEnabled(value);
+                        setState(() {});
+                      },
+                    ),
+                    SwitchListTile(
+                      title: const Text('Voice Control'),
+                      subtitle: const Text('Control video with voice commands'),
+                      value: provider.voiceControlEnabled,
+                      onChanged: (value) {
+                        provider.setVoiceControlEnabled(value);
+                        setState(() {});
+                      },
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Rewind Duration
+            Text(
+              'Rewind Duration',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'When resuming video playback, rewind by this many seconds to catch up on missed steps.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).textTheme.bodySmall?.color,
+              ),
+            ),
+            const SizedBox(height: 16),
+            StatefulBuilder(
+              builder: (context, setState) {
+                final duration = provider.rewindDurationMs / 1000;
+                return Column(
+                  children: [
+                    Slider(
+                      value: duration,
+                      min: 1,
+                      max: 10,
+                      divisions: 9,
+                      label: '${duration.round()} seconds',
+                      onChanged: (value) {
+                        provider.setRewindDuration((value * 1000).round());
+                        setState(() {});
+                      },
+                    ),
+                    Text(
+                      '${duration.round()} seconds',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
