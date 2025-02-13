@@ -28,6 +28,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   UserModel? _user;
   GameScoreModel? _gameScore;
   bool _isLoading = true;
+  bool _isAuthenticated = false;
   final List<VideoModel> _videos = [];
   bool _isFullScreenMode = false;
   int _currentVideoIndex = 0;
@@ -36,10 +37,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _loadUserData();
-    _loadUserVideos();
-    // Listen to game service changes
-    _gameService.addListener(_onGameServiceChanged);
+    _checkAuthAndLoadData();
   }
 
   @override
@@ -49,8 +47,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
+  Future<void> _checkAuthAndLoadData() async {
+    try {
+      // Wait for Firebase Auth to be ready
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _isAuthenticated = false;
+          });
+        }
+        return;
+      }
+
+      setState(() {
+        _isAuthenticated = true;
+      });
+
+      // Now that we're authenticated, load the data
+      await _loadUserData();
+      _gameService.addListener(_onGameServiceChanged);
+    } catch (e) {
+      print('[ProfileScreen] Error checking auth state: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isAuthenticated = false;
+        });
+      }
+    }
+  }
+
   void _onGameServiceChanged() async {
-    // Reload game score when GameService notifies of changes
+    if (!_isAuthenticated) return;
+    
     final gameScore = await _gameService.getUserScore();
     if (mounted) {
       setState(() {
@@ -60,6 +93,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadUserData() async {
+    if (!_isAuthenticated) return;
+
     try {
       print('[ProfileScreen] Loading user data for ID: ${widget.userId}');
       final userData = await _authService.getUserData(widget.userId);
@@ -87,20 +122,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadUserVideos() async {
+    if (!_isAuthenticated) return;
+
     try {
       print('[ProfileScreen] Loading videos for user: ${widget.userId}');
       final snapshot = await _videoService.getUserVideos(widget.userId);
       
       if (mounted) {
         setState(() {
-          _videos.clear(); // Clear existing videos before adding new ones
+          _videos.clear();
           _videos.addAll(snapshot.docs.map((doc) => VideoModel.fromFirestore(doc)).toList());
         });
       }
 
-      // Update video count in user document
       await _videoService.updateUserVideoCount(widget.userId);
-      
       print('[ProfileScreen] Loaded ${_videos.length} videos');
     } catch (e) {
       print('[ProfileScreen] Error loading user videos: $e');
@@ -108,6 +143,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _editProfile() async {
+    if (!_isAuthenticated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in to edit your profile')),
+      );
+      return;
+    }
+
     final result = await Navigator.of(context).pushNamed('/profile-setup');
     if (result == true) {
       _loadUserData();
@@ -129,160 +171,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildVideoGrid() {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.6,
-        crossAxisSpacing: 1,
-        mainAxisSpacing: 1,
-      ),
-      itemCount: _videos.length,
-      itemBuilder: (context, index) {
-        final video = _videos[index];
-        return GestureDetector(
-          onTap: () {
-            setState(() {
-              _isFullScreenMode = true;
-              _currentVideoIndex = index;
-            });
-          },
-          child: Stack(
-            fit: StackFit.expand,
+  @override
+  Widget build(BuildContext context) {
+    if (!_isAuthenticated) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Profile'),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              if (video.thumbnailUrl.isNotEmpty)
-                CachedNetworkImage(
-                  imageUrl: video.thumbnailUrl,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => Container(
-                    color: Colors.grey[900],
-                    child: const Center(
-                      child: CircularProgressIndicator(),
-                    ),
-                  ),
-                  errorWidget: (context, url, error) => Container(
-                    color: Colors.grey[900],
-                    child: const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.video_library, color: Colors.white, size: 32),
-                        SizedBox(height: 4),
-                        Text(
-                          'Video',
-                          style: TextStyle(color: Colors.white, fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  color: Colors.grey[900],
-                  child: const Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.video_library, color: Colors.white, size: 32),
-                      SizedBox(height: 4),
-                      Text(
-                        'Video',
-                        style: TextStyle(color: Colors.white, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-              Positioned(
-                bottom: 8,
-                left: 8,
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.play_arrow,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${video.likes}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        shadows: [
-                          Shadow(
-                            blurRadius: 2.0,
-                            color: Colors.black,
-                            offset: Offset(1.0, 1.0),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+              const Icon(
+                Icons.account_circle_outlined,
+                size: 64,
+                color: Colors.grey,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Sign in to view your profile',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(context).pushReplacementNamed('/auth');
+                },
+                child: const Text('Sign In'),
               ),
             ],
           ),
-        );
-      },
-    );
-  }
-
-  Widget _buildFullScreenVideos() {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          PageView.builder(
-            scrollDirection: Axis.vertical,
-            controller: _pageController,
-            itemCount: _videos.length,
-            onPageChanged: (index) {
-              setState(() => _currentVideoIndex = index);
-              // Ensure the PageController is at the correct position
-              if (_pageController.page?.round() != index) {
-                _pageController.jumpToPage(index);
-              }
-            },
-            itemBuilder: (context, index) {
-              final video = _videos[index];
-              return VideoPlayerFullscreen(
-                key: ValueKey('fullscreen-${video.id}-$index'),
-                video: video,
-                isActive: index == _currentVideoIndex,
-                shouldPreload: index == _currentVideoIndex + 1 || index == _currentVideoIndex - 1,
-                onRetry: () {
-                  setState(() {
-                    // Force rebuild of the video player
-                    _videos[index] = _videos[index];
-                  });
-                },
-              );
-            },
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => setState(() => _isFullScreenMode = false),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isFullScreenMode) {
-      // Ensure the PageController is at the correct position when entering fullscreen
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_pageController.hasClients && _pageController.page?.round() != _currentVideoIndex) {
-          _pageController.jumpToPage(_currentVideoIndex);
-        }
-      });
-      return _buildFullScreenVideos();
+        ),
+      );
     }
 
     if (_isLoading) {
@@ -353,51 +273,118 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 16),
                     // Stats
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         _buildStat('Videos', _videos.length),
+                        _buildStat('Followers', _user?.followers.length ?? 0),
+                        _buildStat('Following', _user?.following.length ?? 0),
                       ],
                     ),
-                    if (_gameScore != null) ...[
-                      const SizedBox(height: 16),
-                      const Divider(),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Spoon Slash Stats',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          _buildStat('High Score', _gameScore!.highScore),
-                          _buildStat('Games Played', _gameScore!.gamesPlayed),
-                        ],
-                      ),
-                    ],
                   ],
                 ),
               ),
-              const Divider(),
               // Videos Grid
-              if (_videos.isEmpty)
+              if (_videos.isNotEmpty) ...[
                 const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Center(
-                    child: Text(
-                      'No videos yet',
-                      style: TextStyle(
-                        color: Colors.grey,
-                        fontSize: 16,
-                      ),
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Videos',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: _buildVideoGrid(),
                 ),
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    childAspectRatio: 0.8,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                  ),
+                  itemCount: _videos.length,
+                  itemBuilder: (context, index) {
+                    final video = _videos[index];
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => Scaffold(
+                              backgroundColor: Colors.black,
+                              body: SafeArea(
+                                child: Stack(
+                                  children: [
+                                    VideoPlayerFullscreen(
+                                      key: ValueKey('fullscreen-${video.id}-$index'),
+                                      video: video,
+                                      isActive: true,
+                                      shouldPreload: false,
+                                      onRetry: () {
+                                        // Retry logic for video playback
+                                        setState(() {
+                                          // Trigger a rebuild to retry loading the video
+                                        });
+                                      },
+                                    ),
+                                    Positioned(
+                                      top: 16,
+                                      left: 16,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.5),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: IconButton(
+                                          icon: const Icon(
+                                            Icons.arrow_back,
+                                            color: Colors.white,
+                                          ),
+                                          onPressed: () => Navigator.pop(context),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (video.thumbnailUrl != null)
+                            CachedNetworkImage(
+                              imageUrl: video.thumbnailUrl!,
+                              fit: BoxFit.cover,
+                            ),
+                          const Center(
+                            child: Icon(
+                              Icons.play_circle_outline,
+                              color: Colors.white,
+                              size: 32,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ] else if (!_isLoading) ...[
+                const SizedBox(height: 32),
+                const Center(
+                  child: Text(
+                    'No videos yet',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

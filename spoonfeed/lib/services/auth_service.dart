@@ -4,6 +4,19 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
+import '../utils/firebase_config.dart';
+
+// Extension on UserModel for Firebase User conversion
+extension UserModelExtension on UserModel {
+  User toFirebaseUser() {
+    return DummyUser(
+      uid: uid,
+      email: email,
+      displayName: displayName,
+      photoURL: photoUrl,
+    );
+  }
+}
 
 class AuthService extends ChangeNotifier {
   final bool isEnabled;
@@ -12,6 +25,8 @@ class AuthService extends ChangeNotifier {
   final GoogleSignIn _googleSignIn;
   final Logger _logger = Logger();
   User? _user;
+  bool _isDevBypass = false;
+  UserModel? _dummyUser;
 
   AuthService({
     this.isEnabled = true,
@@ -24,9 +39,35 @@ class AuthService extends ChangeNotifier {
   User? get currentUser => _user;
 
   // Stream of auth state changes
-  Stream<User?> get authStateChanges => _auth.authStateChanges();
+  Stream<User?> get authStateChanges => _isDevBypass 
+    ? Stream.value(_dummyUser?.toFirebaseUser())
+    : _auth.authStateChanges();
 
-  bool get isSignedIn => _user != null;
+  bool get isSignedIn => _isDevBypass || _user != null;
+
+  // Development bypass method
+  Future<UserModel> bypassAuthForDevelopment() async {
+    _logger.w('⚠️ Using development authentication bypass');
+    _isDevBypass = true;
+    
+    _dummyUser = UserModel(
+      uid: 'dev-user-123',
+      email: 'dev@example.com',
+      username: 'DevUser',
+      displayName: 'Development User',
+      photoUrl: null,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+      isChef: true,
+      bio: 'Development test account',
+      followers: [],
+      following: [],
+      recipes: [],
+    );
+
+    notifyListeners();
+    return _dummyUser!;
+  }
 
   // Sign up with email and password
   Future<UserModel?> signUpWithEmail({
@@ -245,28 +286,267 @@ class AuthService extends ChangeNotifier {
   }
 
   // Sign in with Google
-  Future<UserCredential?> signInWithGoogle() async {
+  Future<UserModel?> signInWithGoogle() async {
     if (!isEnabled) {
-      throw Exception('Authentication is not available');
+      _logger.e('❌ Authentication is not available');
+      throw Exception('Authentication is not available. Please check your internet connection and try again.');
     }
 
     try {
+      _logger.i('🔄 Starting Google sign in process...');
+      _logger.i('Firebase Auth state: ${_auth.currentUser != null ? 'Signed In' : 'Signed Out'}');
+      _logger.i('Using emulator: ${FirebaseConfig.isUsingEmulator}');
+      
+      // Trigger the authentication flow
+      _logger.i('📱 Launching Google Sign-In UI...');
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
-      if (googleUser == null) return null;
+      if (googleUser == null) {
+        _logger.w('⚠️ User cancelled Google sign in');
+        return null;
+      }
+      _logger.i('✅ Google Sign-In successful for: ${googleUser.email}');
 
+      // Obtain the auth details from the request
+      _logger.i('🔑 Getting Google auth details...');
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      _logger.i('✅ Obtained Google auth tokens');
+
+      // Create a new credential
+      _logger.i('🔐 Creating Firebase credential...');
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
+      _logger.i('✅ Firebase credential created');
 
-      final userCredential = await _auth.signInWithCredential(credential);
-      _user = userCredential.user;
-      notifyListeners();
-      return userCredential;
+      // Sign in to Firebase with the credential
+      _logger.i('🔄 Signing in to Firebase with Google credential...');
+      final UserCredential result = await _auth.signInWithCredential(credential);
+      final User? user = result.user;
+      if (user == null) throw Exception('Failed to sign in with Google');
+      _logger.i('✅ Firebase sign in successful for user: ${user.uid}');
+
+      // Check if this is a new user
+      _logger.i('🔍 Checking if user exists in Firestore...');
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      
+      if (!doc.exists) {
+        _logger.i('📝 Creating new user document for Google sign in...');
+        // Create new user document
+        final UserModel newUser = UserModel(
+          uid: user.uid,
+          email: user.email ?? '',
+          username: user.displayName ?? '',
+          displayName: user.displayName,
+          photoUrl: user.photoURL,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          isChef: false,
+          bio: '',
+          followers: [],
+          following: [],
+          recipes: [],
+        );
+
+        try {
+          await _firestore.collection('users').doc(user.uid).set(newUser.toMap());
+          _logger.i('✅ New user document created successfully');
+          return newUser;
+        } catch (e) {
+          _logger.e('❌ Failed to create user document: $e');
+          throw Exception('Failed to create user profile. Please try again.');
+        }
+      }
+
+      _logger.i('✅ User signed in successfully with Google');
+      return UserModel.fromFirestore(doc);
     } catch (e) {
-      _logger.e('Google sign in failed: $e');
+      _logger.e('❌ Error signing in with Google: $e');
+      if (e is FirebaseAuthException) {
+        _logger.e('Firebase Auth Error Code: ${e.code}');
+        _logger.e('Firebase Auth Error Message: ${e.message}');
+        switch (e.code) {
+          case 'account-exists-with-different-credential':
+            throw Exception('An account already exists with a different sign-in method.');
+          case 'invalid-credential':
+            throw Exception('Invalid Google credentials. Please try again.');
+          case 'operation-not-allowed':
+            throw Exception('Google sign-in is not enabled. Please contact support.');
+          case 'user-disabled':
+            throw Exception('This account has been disabled. Please contact support.');
+          default:
+            throw Exception('Failed to sign in with Google. Please try again.');
+        }
+      }
       rethrow;
     }
   }
+}
+
+// Dummy User implementation for development
+class DummyUser implements User {
+  @override
+  final String uid;
+  @override
+  final String? email;
+  @override
+  final String? displayName;
+  @override
+  final String? photoURL;
+
+  DummyUser({
+    required this.uid,
+    this.email,
+    this.displayName,
+    this.photoURL,
+  });
+
+  @override
+  Future<void> delete() async {}
+
+  @override
+  Future<String> getIdToken([bool forceRefresh = false]) async => 'dummy-token';
+
+  @override
+  Future<IdTokenResult> getIdTokenResult([bool forceRefresh = false]) async {
+    return DummyIdTokenResult();
+  }
+
+  @override
+  bool get emailVerified => true;
+
+  @override
+  Future<void> reload() async {}
+
+  @override
+  Future<void> sendEmailVerification([ActionCodeSettings? actionCodeSettings]) async {}
+
+  @override
+  Future<void> updateEmail(String newEmail) async {}
+
+  @override
+  Future<void> updatePassword(String newPassword) async {}
+
+  @override
+  Future<void> updatePhotoURL(String? photoURL) async {}
+
+  @override
+  Future<void> updateDisplayName(String? displayName) async {}
+
+  @override
+  Future<void> verifyBeforeUpdateEmail(String newEmail, [ActionCodeSettings? actionCodeSettings]) async {}
+
+  @override
+  String? get phoneNumber => null;
+
+  @override
+  String? get refreshToken => 'dummy-refresh-token';
+
+  @override
+  bool get isAnonymous => false;
+
+  @override
+  UserMetadata get metadata => DummyUserMetadata();
+
+  @override
+  List<UserInfo> get providerData => [];
+
+  @override
+  String get tenantId => 'dummy-tenant';
+
+  @override
+  MultiFactor get multiFactor => throw UnimplementedError();
+
+  @override
+  Future<UserCredential> linkWithCredential(AuthCredential credential) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<ConfirmationResult> linkWithPhoneNumber(String phoneNumber, [RecaptchaVerifier? verifier]) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<UserCredential> linkWithPopup(AuthProvider provider) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<UserCredential> linkWithProvider(AuthProvider provider) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> linkWithRedirect(AuthProvider provider) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<UserCredential> reauthenticateWithCredential(AuthCredential credential) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<UserCredential> reauthenticateWithPopup(AuthProvider provider) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<UserCredential> reauthenticateWithProvider(AuthProvider provider) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> reauthenticateWithRedirect(AuthProvider provider) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<User> unlink(String providerId) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> updatePhoneNumber(PhoneAuthCredential phoneCredential) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> updateProfile({String? displayName, String? photoURL}) async {
+    throw UnimplementedError();
+  }
+}
+
+// Dummy UserMetadata implementation for development
+class DummyUserMetadata implements UserMetadata {
+  @override
+  DateTime? get creationTime => DateTime.now();
+
+  @override
+  DateTime? get lastSignInTime => DateTime.now();
+}
+
+// Dummy IdTokenResult implementation
+class DummyIdTokenResult implements IdTokenResult {
+  @override
+  Map<String, dynamic> get claims => {};
+
+  @override
+  String get token => 'dummy-token';
+
+  @override
+  DateTime get authTime => DateTime.now();
+
+  @override
+  DateTime get issuedAtTime => DateTime.now();
+
+  @override
+  DateTime get expirationTime => DateTime.now().add(const Duration(hours: 1));
+
+  @override
+  String get signInProvider => 'password';
+
+  @override
+  String? get signInSecondFactor => null;
 } 

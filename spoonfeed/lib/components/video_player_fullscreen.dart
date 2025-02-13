@@ -13,12 +13,13 @@ import '../models/cookbook_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/cook_mode_provider.dart';
 import 'cook_mode/cook_mode_button.dart';
-import 'cook_mode/camera_preview_overlay.dart';
 import '../providers/voice_control_provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'dart:collection';
 import '../utils/texture_painter.dart';
 import 'package:logger/logger.dart';
+import 'package:spoonfeed/components/expandable_recipe_description.dart';
+import 'recipe_viewer.dart';
 
 /// Widget that shows voice recognition feedback
 class VoiceFeedbackOverlay extends StatelessWidget {
@@ -243,6 +244,9 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
   Timer? _bufferingTimer;
   static final Queue<String> _initializationQueue = Queue<String>();
   static bool _isProcessingQueue = false;
+  bool _showRecipe = false;
+  List<String> _ingredients = [];
+  List<String> _steps = [];
 
   @override
   bool get wantKeepAlive => widget.isActive || widget.shouldPreload;
@@ -263,6 +267,7 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       _addToInitializationQueue();
     }
     _initializeMetadata();
+    _parseRecipe();
 
     // Connect to providers after a frame to ensure context is available
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -284,18 +289,23 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       return;
     }
 
-    // Connect to cook mode provider for gesture control
-    final cookModeProvider = Provider.of<CookModeProvider>(context, listen: false);
-    cookModeProvider.setVideo(_controller, widget.video.id);
+    // Use a microtask to avoid state updates during build
+    Future.microtask(() {
+      if (!mounted) return;
+      
+      // Connect to cook mode provider for gesture control
+      final cookModeProvider = Provider.of<CookModeProvider>(context, listen: false);
+      cookModeProvider.setVideo(_controller, widget.video.id);
 
-    // Connect to voice control provider
-    final voiceControlProvider = Provider.of<VoiceControlProvider>(context, listen: false);
-    voiceControlProvider.setVideo(_controller, widget.video.id);
+      // Connect to voice control provider
+      final voiceControlProvider = Provider.of<VoiceControlProvider>(context, listen: false);
+      voiceControlProvider.setVideo(_controller, widget.video.id);
 
-    print('\n[VideoPlayer] ✅ Connected to control providers:');
-    print('  - Video ID: ${widget.video.id}');
-    print('  - Cook mode active: ${cookModeProvider.isActive}');
-    print('  - Voice control enabled: ${voiceControlProvider.isEnabled}');
+      print('\n[VideoPlayer] ✅ Connected to control providers:');
+      print('  - Video ID: ${widget.video.id}');
+      print('  - Cook mode active: ${cookModeProvider.isActive}');
+      print('  - Voice control enabled: ${voiceControlProvider.isEnabled}');
+    });
   }
 
   @override
@@ -449,6 +459,9 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
       print('  - Is disposed: $_isDisposed');
       return;
     }
+
+    // Clean up any existing controller before creating a new one
+    await _cleanupController(reason: 'Pre-initialization cleanup');
     
     try {
       print('\n[VideoPlayer] 🎬 Initializing video: ${widget.video.id}');
@@ -1027,248 +1040,344 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     print('  - New total: $_activeControllers');
   }
 
+  void _parseRecipe() {
+    if (widget.video.description != null) {
+      final lines = widget.video.description!.split('\n');
+      bool inIngredients = false;
+      bool inSteps = false;
+
+      for (final line in lines) {
+        if (line.toLowerCase().contains('ingredients:')) {
+          inIngredients = true;
+          inSteps = false;
+          continue;
+        } else if (line.toLowerCase().contains('instructions:') || 
+                   line.toLowerCase().contains('steps:') ||
+                   line.toLowerCase().contains('directions:')) {
+          inIngredients = false;
+          inSteps = true;
+          continue;
+        }
+
+        if (line.trim().isNotEmpty) {
+          if (inIngredients) {
+            _ingredients.add(line.trim());
+          } else if (inSteps) {
+            _steps.add(line.trim());
+          }
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
     final size = MediaQuery.of(context).size;
-    print('Building video player. Screen size: ${size.width} x ${size.height}');
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
 
-    return Container(
-      color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Video Layer - Constrain height when game mode is active
-          if (widget.isGameMode)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: size.height / 2,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  border: Border(
-                    bottom: BorderSide(
-                      color: Colors.black.withOpacity(0.3),
-                      width: 2,
-                    ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Video Layer - Constrain height when recipe is shown or in game mode
+        if (_showRecipe || widget.isGameMode)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: size.height / 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                border: Border(
+                  bottom: BorderSide(
+                    color: Colors.black.withOpacity(0.3),
+                    width: 2,
                   ),
-                ),
-                child: ClipRect(
-                  child: _buildVideoPlayer(),
                 ),
               ),
-            )
-          else
-            _buildVideoPlayer(),
+              child: ClipRect(
+                child: _buildVideoPlayer(),
+              ),
+            ),
+          )
+        else
+          _buildVideoPlayer(),
 
-          // Status indicators in top-right corner
-          Consumer<CookModeProvider>(
-            builder: (context, cookModeProvider, _) {
-              if (!cookModeProvider.isActive) return const SizedBox.shrink();
-              
-              return Positioned(
-                top: 16,
-                right: 16,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.7),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.1),
-                      width: 1,
+        // Title and Show Recipe Button - Positioned at bottom left
+        Positioned(
+          left: 16,
+          right: 72, // Leave space for right-side buttons
+          bottom: (_showRecipe || widget.isGameMode)
+              ? size.height / 2 + 16 // When recipe is shown or in game mode, position above recipe/game
+              : bottomPadding + kBottomNavigationBarHeight + 16, // Normal position above nav bar
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Title
+              Text(
+                widget.video.title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  shadows: [
+                    Shadow(
+                      offset: Offset(0, 1),
+                      blurRadius: 3.0,
+                      color: Colors.black,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Show Recipe Button
+              if (widget.video.description?.isNotEmpty == true)
+                TextButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _showRecipe = !_showRecipe;
+                    });
+                  },
+                  icon: Icon(
+                    _showRecipe ? Icons.close : Icons.restaurant_menu,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  label: Text(
+                    _showRecipe ? 'Hide Recipe' : 'Show Recipe',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
                     ),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Cook Mode Indicator
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: Colors.green,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Cook Mode',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // Control Indicators
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (cookModeProvider.gestureControlEnabled)
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.gesture,
-                                  color: Colors.white,
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Gesture',
-                                  style: TextStyle(
-                                    color: Colors.white.withOpacity(0.8),
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          if (cookModeProvider.gestureControlEnabled && 
-                              cookModeProvider.voiceControlEnabled)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 6),
-                              child: Text(
-                                '•',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.5),
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ),
-                          if (cookModeProvider.voiceControlEnabled)
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.mic,
-                                  color: Colors.white,
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Voice',
-                                  style: TextStyle(
-                                    color: Colors.white.withOpacity(0.8),
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ),
-                        ],
-                      ),
-                    ],
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.black54,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                 ),
-              );
-            },
+            ],
           ),
+        ),
 
-          // Voice feedback overlay
-          const VoiceFeedbackOverlay(),
-
-          // Title and description - Adjust position in game mode
+        // Recipe View
+        if (_showRecipe && widget.video.description != null)
           Positioned(
             left: 0,
             right: 0,
-            bottom: widget.isGameMode 
-                ? (size.height / 2) + 16 // Position just above game area
-                : MediaQuery.of(context).viewPadding.bottom + kBottomNavigationBarHeight + 48,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            top: size.height / 2,
+            bottom: 0,
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5E6D3), // Light warm brown color
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 8,
+                    offset: const Offset(0, -2),
+                  ),
+                ],
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Title and description
-                  Text(
-                    widget.video.title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      shadows: [
-                        Shadow(
-                          blurRadius: 4,
-                          color: Colors.black,
-                          offset: Offset(1, 1),
-                        ),
-                      ],
+                  // Handle bar for visual indication
+                  Container(
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
-                  if (widget.video.description.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.video.description,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                        shadows: [
-                          Shadow(
-                            blurRadius: 4,
-                            color: Colors.black,
-                            offset: Offset(1, 1),
+                  // Recipe content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Recipe Title
+                          Text(
+                            widget.video.title,
+                            style: const TextStyle(
+                              color: Color(0xFF2C1810), // Dark brown for contrast
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
+                          const SizedBox(height: 20),
+                          
+                          // Ingredients Section
+                          if (_ingredients.isNotEmpty) ...[
+                            const Text(
+                              'Ingredients',
+                              style: TextStyle(
+                                color: Color(0xFF2C1810),
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            ...List.generate(
+                              _ingredients.length,
+                              (index) => Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      margin: const EdgeInsets.only(top: 8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2C1810).withOpacity(0.7),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        _ingredients[index],
+                                        style: const TextStyle(
+                                          color: Color(0xFF2C1810),
+                                          fontSize: 16,
+                                          height: 1.5,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                          
+                          // Instructions Section
+                          if (_steps.isNotEmpty) ...[
+                            const Text(
+                              'Instructions',
+                              style: TextStyle(
+                                color: Color(0xFF2C1810),
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            ...List.generate(
+                              _steps.length,
+                              (index) => Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      width: 24,
+                                      height: 24,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2C1810).withOpacity(0.1),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        '${index + 1}',
+                                        style: TextStyle(
+                                          color: const Color(0xFF2C1810).withOpacity(0.9),
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        _steps[index],
+                                        style: const TextStyle(
+                                          color: Color(0xFF2C1810),
+                                          fontSize: 16,
+                                          height: 1.5,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                          
+                          // If no ingredients or steps were found, show raw description
+                          if (_ingredients.isEmpty && _steps.isEmpty)
+                            Text(
+                              widget.video.description!,
+                              style: const TextStyle(
+                                color: Color(0xFF2C1810),
+                                fontSize: 16,
+                                height: 1.5,
+                              ),
+                            ),
+                            
+                          // Add bottom padding to account for navigation bar
+                          SizedBox(height: bottomPadding + kBottomNavigationBarHeight),
                         ],
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ],
+                  ),
                 ],
               ),
             ),
           ),
 
-          // Interaction buttons on the right - Adjust position in game mode
-          Positioned(
-            right: 16,
-            bottom: widget.isGameMode 
-                ? (size.height / 2) + 16 // Position just above game area
-                : size.height * 0.15,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Add cook mode button at the top
-                const CookModeButton(),
-                const SizedBox(height: 20),
-                _buildInteractionButton(
-                  icon: _isLiked ? Icons.favorite : Icons.favorite_border,
-                  label: _likeCount.toString(),
-                  color: _isLiked ? Colors.red : Colors.white,
-                  onTap: _handleLike,
-                ),
-                const SizedBox(height: 20),
-                _buildInteractionButton(
-                  icon: Icons.comment,
-                  label: _commentCount.toString(),
-                  onTap: _showComments,
-                ),
-                const SizedBox(height: 20),
-                _buildInteractionButton(
-                  icon: Icons.bookmark_border,
-                  label: 'Save',
-                  onTap: _showBookmarkDialog,
-                ),
-                const SizedBox(height: 20),
-                _buildInteractionButton(
-                  icon: Icons.share,
-                  label: _shareCount.toString(),
-                  onTap: () => _showShareSheet(context),
-                ),
-              ],
-            ),
+        // Voice feedback overlay
+        const VoiceFeedbackOverlay(),
+
+        // Interaction buttons on the right
+        Positioned(
+          right: 16,
+          bottom: (_showRecipe || widget.isGameMode)
+              ? size.height / 2 + 16 // When recipe is shown or in game mode, position above recipe/game
+              : bottomPadding + kBottomNavigationBarHeight + 16, // Normal position above nav bar
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Add cook mode button at the top
+              const CookModeButton(),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: _isLiked ? Icons.favorite : Icons.favorite_border,
+                label: _likeCount.toString(),
+                color: _isLiked ? Colors.red : Colors.white,
+                onTap: _handleLike,
+              ),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: Icons.comment,
+                label: _commentCount.toString(),
+                onTap: _showComments,
+              ),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: Icons.bookmark_border,
+                label: 'Save',
+                onTap: _showBookmarkDialog,
+              ),
+              const SizedBox(height: 20),
+              _buildInteractionButton(
+                icon: Icons.share,
+                label: _shareCount.toString(),
+                onTap: () => _showShareSheet(context),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1324,10 +1433,10 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
                             });
                             // Clean up existing controller
                             _cleanupController(reason: 'Manual retry');
-                            // Call parent's retry callback
-                            widget.onRetry();
-                            // Reinitialize video
+                            // Reinitialize video directly
                             _initializeVideo(highPriority: true);
+                            // Call parent's retry callback after reinitialization
+                            widget.onRetry();
                           },
                           icon: const Icon(Icons.refresh),
                           label: const Text('Retry'),

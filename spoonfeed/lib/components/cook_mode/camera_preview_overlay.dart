@@ -6,10 +6,21 @@ import '../../providers/cook_mode_provider.dart';
 /// A widget that handles the camera preview for cook mode gesture detection.
 /// The preview is invisible but the camera remains functional for gesture detection.
 class CameraPreviewOverlay extends StatelessWidget {
-  const CameraPreviewOverlay({super.key});
+  // Add a flag to control visibility, defaulting to false (hidden)
+  final bool showDebugOverlay;
+  
+  const CameraPreviewOverlay({
+    super.key,
+    this.showDebugOverlay = false,  // Default to hidden
+  });
 
   @override
   Widget build(BuildContext context) {
+    // If debug overlay is not enabled, return an empty widget
+    if (!showDebugOverlay) {
+      return const SizedBox.shrink();
+    }
+
     return Consumer<CookModeProvider>(
       builder: (context, provider, child) {
         if (!provider.isActive || provider.cameraController == null) {

@@ -10,27 +10,42 @@ class FirebaseConfig {
 
   static Future<void> configureEmulators() async {
     try {
-      const String localhost = 'localhost';
+      // Use 10.0.2.2 for Android emulator, localhost for other platforms
+      const String host = kIsWeb ? 'localhost' : '10.0.2.2';
+      
+      _logger.i('Configuring Firebase emulators with host: $host');
+      _logger.i('Debug mode: ${kDebugMode}');
       
       // Only use emulators in debug mode
       if (kDebugMode) {
         try {
-          await FirebaseAuth.instance.useAuthEmulator(localhost, 9099);
-          FirebaseFirestore.instance.useFirestoreEmulator(localhost, 8080);
-          await FirebaseStorage.instance.useStorageEmulator(localhost, 9199);
+          _logger.i('Configuring Auth emulator...');
+          await FirebaseAuth.instance.useAuthEmulator(host, 9099);
+          
+          _logger.i('Configuring Firestore emulator...');
+          FirebaseFirestore.instance.useFirestoreEmulator(host, 8080);
+          
+          _logger.i('Configuring Storage emulator...');
+          await FirebaseStorage.instance.useStorageEmulator(host, 9199);
           
           _useEmulator = true;
-          _logger.i('Firebase emulators configured successfully');
+          _logger.i('✅ All Firebase emulators configured successfully');
+          
+          // Verify configuration
+          final auth = FirebaseAuth.instance;
+          _logger.i('Current auth state - isSignedIn: ${auth.currentUser != null}');
+          
         } catch (e) {
-          _logger.w('Failed to configure emulators, falling back to production: $e');
+          _logger.e('❌ Failed to configure emulators: $e');
           _useEmulator = false;
+          rethrow;
         }
       } else {
         _logger.i('Using production Firebase instance (not in debug mode)');
       }
     } catch (e) {
-      _logger.e('Error in Firebase configuration: $e');
-      rethrow; // Propagate the error to handle it in the app
+      _logger.e('❌ Error in Firebase configuration: $e');
+      rethrow;
     }
   }
 

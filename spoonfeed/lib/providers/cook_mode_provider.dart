@@ -51,6 +51,9 @@ class CookModeProvider extends ChangeNotifier {
   String? _error;
   bool _isCameraReady = false;
   DateTime? _lastGestureTime;
+  DateTime? _lastMotionTime;
+  bool _forceReset = false;
+  bool _fieldsCleared = false;
   static const _gestureDebounceMs = 1000; // 1 second debounce
 
   // Rewind settings
@@ -136,12 +139,21 @@ class CookModeProvider extends ChangeNotifier {
       }
     }
 
+    // Reset gesture state when switching videos
+    if (hadController && controller != null && _gestureControlEnabled) {
+      _lastGestureTime = null;
+      _lastMotionTime = null;
+      _forceReset = false;
+      _fieldsCleared = false;
+    }
+
     CookModeLogger.logVideo('Video controller set', data: {
       'hasController': controller != null,
       'videoId': videoId,
       'previouslyHadController': hadController,
       'isActive': _isActive,
       'isCameraReady': _isCameraReady,
+      'gestureControlEnabled': _gestureControlEnabled,
     });
   }
 

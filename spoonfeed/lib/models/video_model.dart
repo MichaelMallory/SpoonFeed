@@ -46,7 +46,10 @@ class VideoModel {
         highestGameScore: data['highestGameScore'] ?? 0,
         pinnedCommentId: data['pinnedCommentId'],
       );
-    } else if (doc is Map<String, dynamic>) {
+    }
+    
+    // Handle Map case
+    if (doc is Map<String, dynamic>) {
       return VideoModel(
         id: doc['id'] ?? '',
         userId: doc['userId'] ?? '',
@@ -62,6 +65,7 @@ class VideoModel {
         pinnedCommentId: doc['pinnedCommentId'],
       );
     }
+    
     throw ArgumentError('Unsupported type for VideoModel.fromFirestore: ${doc.runtimeType}');
   }
 

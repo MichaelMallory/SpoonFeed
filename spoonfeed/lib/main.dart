@@ -30,106 +30,92 @@ import 'providers/voice_control_provider.dart';
 import 'screens/wake_word_test_screen.dart';
 import 'services/video_player_service.dart';
 
-// Initialize logger for debugging with custom printer for emojis
-final logger = Logger(
-  printer: PrettyPrinter(
-    methodCount: 0,
-    errorMethodCount: 5,
-    lineLength: 50,
-    colors: true,
-    printEmojis: true,
-  ),
-);
-
 // Add near the top of the file, after imports
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
 
-Future<void> main() async {
-  await runZonedGuarded(() async {
-    logger.i('🚀 Starting SpoonFeed initialization...');
-    
-    WidgetsFlutterBinding.ensureInitialized();
-    logger.i('🎯 Flutter binding initialized');
+void main() async {
+  // Ensure Flutter is initialized
+  WidgetsFlutterBinding.ensureInitialized();
 
-    // Load .env file
+  // Initialize logger for debugging
+  final logger = Logger(
+    printer: PrettyPrinter(
+      methodCount: 0,
+      errorMethodCount: 5,
+      lineLength: 50,
+      colors: true,
+      printEmojis: true,
+    ),
+  );
+
+  // Run app with error handling
+  runZonedGuarded(() async {
+    logger.i('🚀 Starting app initialization...');
+    bool isFirebaseInitialized = false;
+    SharedPreferences prefs;
+
     try {
-      logger.i('📝 Loading environment variables...');
-      await dotenv.load(fileName: ".env");
-      logger.i('✅ Environment variables loaded successfully');
+      // Step 1: Initialize shared preferences
+      logger.i('💾 Initializing SharedPreferences...');
+      prefs = await SharedPreferences.getInstance();
+      logger.i('✅ SharedPreferences initialized');
     } catch (e) {
-      logger.e('❌ Failed to load environment variables: $e');
+      logger.e('❌ SharedPreferences initialization failed: $e');
       rethrow;
     }
 
-    late final SharedPreferences prefs;
-    bool isFirebaseInitialized = false;
-
-    // Enable verbose logging for development
-    CookModeLogger.verboseLogging = true;
-
-    // Step 1: Initialize SharedPreferences
+    // Step 2: Load environment variables
     try {
-      logger.i('💾 Initializing SharedPreferences...');
-      prefs = await SharedPreferences.getInstance();
-      logger.i('✅ SharedPreferences initialized successfully');
-    } catch (e) {
-      logger.e('❌ Failed to initialize SharedPreferences: $e');
-      logger.i('🔄 Falling back to mock SharedPreferences');
-      SharedPreferences.setMockInitialValues({});
-      prefs = await SharedPreferences.getInstance();
-    }
-
-    // Step 2: Check Connectivity
-    try {
-      logger.i('🌐 Checking internet connectivity...');
-      final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity == ConnectivityResult.none) {
-        logger.w('⚠️ No internet connection detected, some features may be limited');
-      } else {
-        logger.i('✅ Internet connection available: ${connectivity.toString()}');
-      }
-    } catch (e) {
-      logger.w('⚠️ Failed to check connectivity: $e');
-    }
-
-    // Step 3: Initialize ConfigService
-    try {
-      logger.i('⚙️ Initializing ConfigService...');
+      logger.i('🔧 Loading environment variables...');
       await ConfigService.initialize();
-      logger.i('✅ ConfigService initialized successfully');
+      logger.i('✅ Environment variables loaded');
     } catch (e) {
-      logger.e('❌ ConfigService initialization failed: $e');
+      logger.e('❌ Environment variables loading failed: $e');
       logger.w('⚠️ App may have limited functionality');
     }
 
-    // Step 4: Initialize Firebase with timeout
+    // Step 3: Initialize Firebase
     try {
       logger.i('🔥 Initializing Firebase...');
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      ).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          logger.e('⏰ Firebase initialization timed out');
-          throw TimeoutException('Firebase initialization timed out');
-        },
-      );
       
-      // Configure Emulators in Debug Mode
-      if (kDebugMode) {
-        logger.i('🧪 Configuring Firebase Emulators for debug mode...');
-        await FirebaseConfig.configureEmulators();
-        logger.i('✅ Firebase Emulators configured successfully');
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+        
+        // Wait for Firebase to be ready
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // Verify Firebase is initialized
+        if (Firebase.apps.isEmpty) {
+          throw Exception('Firebase initialization verification failed');
+        }
+        
+        isFirebaseInitialized = true;
+        logger.i('✅ Firebase initialized successfully');
+
+        // Configure Emulators in Debug Mode
+        if (kDebugMode) {
+          logger.i('🧪 Configuring Firebase Emulators for debug mode...');
+          await FirebaseConfig.configureEmulators();
+          logger.i('✅ Firebase Emulators configured successfully');
+        }
+      } else {
+        logger.i('✅ Firebase already initialized');
+        isFirebaseInitialized = true;
       }
-      
-      isFirebaseInitialized = true;
-      logger.i('✅ Firebase initialized successfully');
     } catch (e) {
       logger.e('❌ Firebase initialization failed: $e');
       isFirebaseInitialized = false;
     }
 
-    // Step 5: Run App with Proper Provider Setup
+    // Log Firebase initialization status
+    logger.i('Firebase initialization status: ${isFirebaseInitialized ? 'SUCCESS' : 'FAILED'}');
+    if (!isFirebaseInitialized) {
+      logger.w('⚠️ App will run with limited functionality due to Firebase initialization failure');
+    }
+
+    // Step 4: Run App with Proper Provider Setup
     logger.i('🏗️ Setting up app providers...');
     runApp(
       MultiProvider(
@@ -180,7 +166,6 @@ Future<void> main() async {
     
   }, (error, stack) {
     logger.e('💥 Unhandled error in app: $error\n$stack');
-    // TODO: Add crash analytics reporting here
   });
 }
 
@@ -236,79 +221,81 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  final Logger _logger = Logger();
+
   @override
   void initState() {
     super.initState();
-    logger.i('🎬 Starting splash screen sequence');
+    _logger.i('🎬 Starting splash screen sequence');
     _checkInitialRoute();
   }
 
   Future<void> _checkInitialRoute() async {
     try {
-      logger.i('⏳ Showing splash screen for 2 seconds');
+      _logger.i('⏳ Showing splash screen for 2 seconds');
       await Future.delayed(const Duration(seconds: 2));
       
       if (!mounted) {
-        logger.w('⚠️ Widget unmounted during splash delay');
+        _logger.w('⚠️ Widget unmounted during splash delay');
         return;
       }
 
       // Check if user has completed onboarding
-      logger.i('🔍 Checking onboarding status');
+      _logger.i('🔍 Checking onboarding status');
       final prefs = await SharedPreferences.getInstance();
       final hasCompletedOnboarding = prefs.getBool('has_completed_onboarding') ?? false;
-      logger.i('📱 Onboarding status: ${hasCompletedOnboarding ? 'completed' : 'not completed'}');
+      _logger.i('📱 Onboarding status: ${hasCompletedOnboarding ? 'completed' : 'not completed'}');
 
       if (!mounted) {
-        logger.w('⚠️ Widget unmounted during onboarding check');
+        _logger.w('⚠️ Widget unmounted during onboarding check');
         return;
       }
 
       if (!hasCompletedOnboarding) {
-        logger.i('🆕 New user detected - navigating to onboarding');
+        _logger.i('🆕 New user detected - navigating to onboarding');
         Navigator.of(context).pushReplacementNamed('/onboarding');
         return;
       }
 
       // Only check auth state if onboarding is completed
       try {
-        logger.i('🔐 Checking authentication state');
+        _logger.i('🔐 Checking authentication state');
         final user = FirebaseAuth.instance.currentUser;
         
         if (user != null) {
-          logger.i('👤 User authenticated: ${user.uid}');
+          _logger.i('👤 User authenticated: ${user.uid}');
           final authService = Provider.of<AuthService>(context, listen: false);
           
-          logger.i('📋 Fetching user profile data');
+          _logger.i('📋 Fetching user profile data');
           final userData = await authService.getUserData(user.uid);
           
           if (!mounted) {
-            logger.w('⚠️ Widget unmounted during profile check');
+            _logger.w('⚠️ Widget unmounted during profile check');
             return;
           }
           
           if (userData?.displayName == null || userData?.bio == null) {
-            logger.i('⚠️ Incomplete profile detected - navigating to profile setup');
+            _logger.i('⚠️ Incomplete profile detected - navigating to profile setup');
             Navigator.of(context).pushReplacementNamed('/profile-setup');
           } else {
-            logger.i('✅ Profile complete - navigating to main screen');
+            _logger.i('✅ Profile complete - navigating to main screen');
             Navigator.of(context).pushReplacementNamed('/main');
           }
         } else {
-          logger.i('🔒 No authenticated user - navigating to auth screen');
+          _logger.i('🔒 No authenticated user - navigating to auth screen');
           Navigator.of(context).pushReplacementNamed('/auth');
         }
       } catch (e) {
-        logger.e('❌ Auth check failed: $e');
+        _logger.e('❌ Auth check failed: $e');
         if (mounted) {
-          logger.i('↩️ Falling back to onboarding screen');
+          _logger.i('↩️ Falling back to onboarding screen');
           Navigator.of(context).pushReplacementNamed('/onboarding');
         }
       }
     } catch (e) {
-      logger.e('💥 Critical error during navigation check: $e');
+      _logger.e('💥 Critical error during navigation check: $e');
       if (mounted) {
-        logger.i('↩️ Falling back to onboarding screen as safety measure');
+        _logger.i('↩️ Falling back to onboarding screen as safety measure');
         Navigator.of(context).pushReplacementNamed('/onboarding');
       }
     }

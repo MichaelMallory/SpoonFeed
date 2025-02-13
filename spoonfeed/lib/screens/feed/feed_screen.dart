@@ -101,6 +101,13 @@ class _FeedScreenState extends State<FeedScreen> {
         _isInitialLoadComplete = true;
       });
 
+      // Set initial video in GameService
+      if (_videos.isNotEmpty) {
+        final gameService = Provider.of<GameService>(context, listen: false);
+        gameService.setCurrentVideo(_videos[0]);
+        print('  ✅ Set initial video in GameService: ${_videos[0].id}');
+      }
+
       print('[FeedScreen] 🔄 Updated state:');
       print('  - Video count: ${_videos.length}');
       print('  - Last document ID: ${_lastDocument?.id}');
@@ -242,6 +249,13 @@ class _FeedScreenState extends State<FeedScreen> {
     
     setState(() => _currentVideoIndex = index);
     
+    // Update current video in GameService
+    if (index >= 0 && index < _videos.length) {
+      final gameService = Provider.of<GameService>(context, listen: false);
+      gameService.setCurrentVideo(_videos[index]);
+      print('  ✅ Updated current video in GameService: ${_videos[index].id}');
+    }
+    
     // Verify preloading of upcoming videos
     _verifyPreloadedVideos();
     
@@ -314,84 +328,42 @@ class _FeedScreenState extends State<FeedScreen> {
     final targetVideo = _videos[index];
     print('  - Target video ID: ${targetVideo.id}');
 
-    setState(() {
-      _isLoadingMore = true;
-      _videos.clear(); // Clear all videos
-      _currentVideoIndex = 0;
-      _lastDocument = null;
-      _hasMoreVideos = true;
-    });
-
     try {
-      // Load videos around the target video
-      final snapshot = await _videoService.loadMoreVideos();
+      // Fetch just the single video document
+      final videoDoc = await FirebaseFirestore.instance
+          .collection('videos')
+          .doc(targetVideo.id)
+          .get();
 
-      if (snapshot.docs.isEmpty) {
-        print('  ❌ No videos found in retry attempt');
-        setState(() {
-          _isLoadingMore = false;
-          _hasMoreVideos = false;
-        });
+      if (!videoDoc.exists) {
+        print('  ❌ Video document not found');
         return;
       }
 
-      // Find the target video in the new snapshot
-      int targetIndex = snapshot.docs.indexWhere((doc) => doc.id == targetVideo.id);
-      if (targetIndex == -1) {
-        print('  ⚠️ Target video not found in new data');
-        targetIndex = 0;
-      }
-
-      // Calculate the range of videos to load
-      int startIndex = (targetIndex - 2).clamp(0, snapshot.docs.length - 1);
-      int endIndex = (targetIndex + 2).clamp(0, snapshot.docs.length - 1);
-
-      print('  📊 Loading video range:');
-      print('    - Start index: $startIndex');
-      print('    - Target index: $targetIndex');
-      print('    - End index: $endIndex');
-
-      final videosToLoad = snapshot.docs.sublist(startIndex, endIndex + 1);
-      final List<VideoModel> newVideos = [];
-
-      for (final doc in videosToLoad) {
-        try {
-          final video = VideoModel.fromFirestore(doc);
-          newVideos.add(video);
-          print('    ✓ Loaded video: ${video.id}');
-        } catch (e) {
-          print('    ❌ Error parsing video: ${doc.id}');
-          print('      Error: $e');
+      try {
+        final updatedVideo = VideoModel.fromFirestore(videoDoc);
+        if (mounted) {
+          setState(() {
+            // Update just this video in the list
+            _videos[index] = updatedVideo;
+          });
+          
+          // Update GameService if this is the current video
+          if (index == _currentVideoIndex) {
+            final gameService = Provider.of<GameService>(context, listen: false);
+            gameService.setCurrentVideo(updatedVideo);
+            print('  ✅ Updated current video in GameService: ${updatedVideo.id}');
+          }
+          
+          print('\n[FeedScreen] ✅ Video refreshed successfully:');
+          print('  - Video ID: ${updatedVideo.id}');
         }
-      }
-
-      if (mounted) {
-        setState(() {
-          _videos.clear();
-          _videos.addAll(newVideos);
-          _lastDocument = snapshot.docs.last;
-          _currentVideoIndex = newVideos.indexWhere((v) => v.id == targetVideo.id);
-          if (_currentVideoIndex == -1) _currentVideoIndex = 0;
-          _isLoadingMore = false;
-          _hasMoreVideos = snapshot.docs.length > endIndex;
-        });
-
-        // Jump to the target video
-        _pageController.jumpToPage(_currentVideoIndex);
-        
-        print('\n[FeedScreen] ✅ Retry completed:');
-        print('  - Loaded ${newVideos.length} videos');
-        print('  - Current index: $_currentVideoIndex');
-        print('  - Has more videos: $_hasMoreVideos');
+      } catch (e) {
+        print('  ❌ Error parsing video: ${videoDoc.id}');
+        print('    Error: $e');
       }
     } catch (e) {
       print('  ❌ Error during retry: $e');
-      if (mounted) {
-        setState(() {
-          _isLoadingMore = false;
-          _hasMoreVideos = false;
-        });
-      }
     }
   }
 

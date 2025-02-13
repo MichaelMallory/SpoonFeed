@@ -15,6 +15,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:video_player/video_player.dart';
 import 'package:spoonfeed/services/video_player_service.dart';
+import 'package:flutter/widgets.dart';
 
 /// Service for handling voice commands, including recording and processing
 class VoiceCommandService extends ChangeNotifier {
@@ -585,10 +586,15 @@ class VoiceCommandService extends ChangeNotifier {
 
   // Add setter for video controller
   void setVideoController(VideoPlayerController? controller) {
-    // Only update if the controller has actually changed
-    if (_videoController != controller) {
+    // Only update if the controller has actually changed and we're not disposed
+    if (!_isDisposed && _videoController != controller) {
       _videoController = controller;
-      notifyListeners();
+      // Schedule the notification for the next frame to avoid build-phase updates
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_isDisposed) {
+          notifyListeners();
+        }
+      });
     }
   }
 

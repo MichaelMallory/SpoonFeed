@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import 'package:logger/logger.dart';
+import 'package:flutter/foundation.dart';
+import 'package:provider/provider.dart';
 
-class AuthScreen extends StatelessWidget {
+class AuthScreen extends StatefulWidget {
   final bool isFirebaseEnabled;
 
   const AuthScreen({
@@ -11,9 +13,55 @@ class AuthScreen extends StatelessWidget {
   }) : super(key: key);
 
   @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
+  late final Logger _logger;
+  bool _isInitializing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _logger = Logger();
+    _checkFirebaseState();
+  }
+
+  Future<void> _checkFirebaseState() async {
+    try {
+      // Wait for Firebase to be fully initialized
+      await Future.delayed(const Duration(seconds: 1));
+      
+      if (mounted) {
+        setState(() {
+          _isInitializing = false;
+        });
+      }
+    } catch (e) {
+      _logger.e('Error checking Firebase state: $e');
+      if (mounted) {
+        setState(() {
+          _isInitializing = false;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (!isFirebaseEnabled) {
+    if (_isInitializing) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (!widget.isFirebaseEnabled) {
       return Scaffold(
+        appBar: AppBar(
+          title: const Text('Authentication'),
+        ),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -32,7 +80,7 @@ class AuthScreen extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 32),
                 child: Text(
-                  'Authentication is currently unavailable. Please try again later.',
+                  'Authentication is currently unavailable. Please check your internet connection and try again.',
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -49,24 +97,36 @@ class AuthScreen extends StatelessWidget {
       );
     }
 
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('SpoonFeed'),
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Sign In'),
-              Tab(text: 'Sign Up'),
-            ],
-          ),
-        ),
-        body: const TabBarView(
-          children: [
-            SignInForm(),
-            SignUpForm(),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Sign In'),
+      ),
+      body: SignInForm(),
+    );
+  }
+}
+
+// Separate widget for the main auth content
+class AuthScreenContent extends StatelessWidget {
+  const AuthScreenContent({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('SpoonFeed'),
+        bottom: const TabBar(
+          tabs: [
+            Tab(text: 'Sign In'),
+            Tab(text: 'Sign Up'),
           ],
         ),
+      ),
+      body: const TabBarView(
+        children: [
+          SignInForm(),
+          SignUpForm(),
+        ],
       ),
     );
   }
@@ -137,27 +197,47 @@ class _SignInFormState extends State<SignInForm> {
 
     try {
       final authService = AuthService();
-      final credential = await authService.signInWithGoogle();
-      if (credential == null || credential.user == null) return;
-
-      // Check if user profile is complete
-      if (credential.user!.displayName == null) {
-        if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed('/profile-setup');
-      } else {
-        if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed('/main');
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-      });
-    } finally {
-      if (mounted) {
+      final user = await authService.signInWithGoogle();
+      
+      if (!mounted) return;
+      
+      if (user == null) {
+        // User cancelled the sign-in flow
         setState(() {
           _isLoading = false;
         });
+        return;
       }
+
+      // Check if user profile is complete
+      if (user.displayName == null || user.bio == null || user.bio!.isEmpty) {
+        Navigator.of(context).pushReplacementNamed('/profile-setup');
+      } else {
+        Navigator.of(context).pushReplacementNamed('/main');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      
+      setState(() {
+        _errorMessage = e.toString();
+        _isLoading = false;
+      });
+
+      // Show error in snackbar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_errorMessage ?? 'An error occurred'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Dismiss',
+            textColor: Theme.of(context).colorScheme.onError,
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            },
+          ),
+        ),
+      );
     }
   }
 
@@ -394,27 +474,47 @@ class _SignUpFormState extends State<SignUpForm> {
 
     try {
       final authService = AuthService();
-      final credential = await authService.signInWithGoogle();
-      if (credential == null || credential.user == null) return;
-
-      // Check if user profile is complete
-      if (credential.user!.displayName == null) {
-        if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed('/profile-setup');
-      } else {
-        if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed('/main');
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-      });
-    } finally {
-      if (mounted) {
+      final user = await authService.signInWithGoogle();
+      
+      if (!mounted) return;
+      
+      if (user == null) {
+        // User cancelled the sign-in flow
         setState(() {
           _isLoading = false;
         });
+        return;
       }
+
+      // Check if user profile is complete
+      if (user.displayName == null || user.bio == null || user.bio!.isEmpty) {
+        Navigator.of(context).pushReplacementNamed('/profile-setup');
+      } else {
+        Navigator.of(context).pushReplacementNamed('/main');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      
+      setState(() {
+        _errorMessage = e.toString();
+        _isLoading = false;
+      });
+
+      // Show error in snackbar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_errorMessage ?? 'An error occurred'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Dismiss',
+            textColor: Theme.of(context).colorScheme.onError,
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            },
+          ),
+        ),
+      );
     }
   }
 
