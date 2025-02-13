@@ -266,33 +266,51 @@ class VoiceCommandService extends ChangeNotifier {
       return;
     }
 
+    _logger.i('📹 Video Controller State:');
+    _logger.i('   - Is Playing: ${_videoController?.value.isPlaying}');
+    _logger.i('   - Position: ${_videoController?.value.position}');
+    _logger.i('   - Duration: ${_videoController?.value.duration}');
+    _logger.i('   - Volume: ${_videoController?.value.volume}');
+
     bool commandExecuted = false;
     
     try {
       final normalizedCommand = command.toLowerCase();
       
       if (normalizedCommand.contains('play')) {
+        _logger.i('▶️ Attempting to play video');
         await _videoController!.play();
         await _videoController!.setVolume(1.0);
-        _logger.i('▶️ Playing video');
+        _logger.i('✅ Play command executed');
         commandExecuted = true;
       } else if (normalizedCommand.contains('pause')) {
+        _logger.i('⏸️ Attempting to pause video');
         await _videoController!.pause();
-        _logger.i('⏸️ Pausing video');
+        _logger.i('✅ Pause command executed');
         commandExecuted = true;
       } else if (normalizedCommand.contains('back') || normalizedCommand.contains('rewind')) {
         final seconds = _extractSeconds(normalizedCommand);
-        final newPosition = _videoController!.value.position - Duration(seconds: seconds);
+        final currentPosition = _videoController!.value.position;
+        final newPosition = currentPosition - Duration(seconds: seconds);
+        _logger.i('⏪ Attempting to seek from ${currentPosition.inSeconds}s to ${newPosition.inSeconds}s');
         await _videoController!.seekTo(newPosition);
-        _logger.i('⏪ Seeking back $seconds seconds');
+        _logger.i('✅ Seek command executed');
         commandExecuted = true;
       } else if (normalizedCommand.contains('forward') || normalizedCommand.contains('ahead')) {
         final seconds = _extractSeconds(normalizedCommand);
-        final newPosition = _videoController!.value.position + Duration(seconds: seconds);
+        final currentPosition = _videoController!.value.position;
+        final newPosition = currentPosition + Duration(seconds: seconds);
+        _logger.i('⏩ Attempting to seek from ${currentPosition.inSeconds}s to ${newPosition.inSeconds}s');
         await _videoController!.seekTo(newPosition);
-        _logger.i('⏩ Seeking forward $seconds seconds');
+        _logger.i('✅ Seek command executed');
         commandExecuted = true;
       }
+
+      // Log final state after command execution
+      _logger.i('📹 Final Video Controller State:');
+      _logger.i('   - Is Playing: ${_videoController?.value.isPlaying}');
+      _logger.i('   - Position: ${_videoController?.value.position}');
+      _logger.i('   - Volume: ${_videoController?.value.volume}');
 
       // If no valid command was executed, resume playback
       if (!commandExecuted) {
@@ -677,8 +695,51 @@ class VoiceCommandService extends ChangeNotifier {
     if (_isDisposed) return;
     
     try {
+      _logger.i('🎯 Wake word "hey chef" detected');
+      
+      // Log initial video state
+      _logger.i('📹 Initial Video Controller State:');
+      _logger.i('   - Controller exists: ${_videoController != null}');
+      if (_videoController != null) {
+        _logger.i('   - Is Playing: ${_videoController!.value.isPlaying}');
+        _logger.i('   - Position: ${_videoController!.value.position}');
+        _logger.i('   - Volume: ${_videoController!.value.volume}');
+      }
+
+      // Pause video immediately when wake word is detected
+      if (_videoController?.value.isPlaying ?? false) {
+        _logger.i('⏸️ Attempting to pause video and mute audio');
+        await _videoController?.pause();
+        await _videoController?.setVolume(0.0);
+        _logger.i('✅ Video paused and muted');
+      }
+
       // Stop wake word detection temporarily
       await _porcupineManager?.stop();
+      _logger.i('🎤 Wake word detection temporarily stopped');
+
+      // Set up a timer to resume video after 5 seconds if no command is given
+      Timer(const Duration(seconds: 5), () async {
+        if (_videoController != null && 
+            !_videoController!.value.isPlaying && 
+            !_isProcessing) {
+          _logger.i('⚠️ No command received within timeout, resuming playback');
+          _logger.i('📹 Pre-resume Video State:');
+          _logger.i('   - Is Playing: ${_videoController!.value.isPlaying}');
+          _logger.i('   - Position: ${_videoController!.value.position}');
+          
+          await _videoController!.setVolume(1.0);
+          await _videoController!.play();
+          
+          _logger.i('📹 Post-resume Video State:');
+          _logger.i('   - Is Playing: ${_videoController!.value.isPlaying}');
+          _logger.i('   - Position: ${_videoController!.value.position}');
+        }
+        
+        // Ensure wake word detection is restarted after the timer
+        _logger.i('🎤 Restarting wake word detection after timeout');
+        await startListeningForWakeWord();
+      });
       
       // Initialize speech recognition if not already initialized
       bool isInitialized = await _speech.initialize();
@@ -694,14 +755,21 @@ class VoiceCommandService extends ChangeNotifier {
             final command = result.recognizedWords.toLowerCase();
             _processVoiceCommand(command);
             
-            // Restart wake word detection
+            // Restart wake word detection after command processing
+            _logger.i('🎤 Restarting wake word detection after command');
             startListeningForWakeWord();
           }
         },
       );
     } catch (error) {
-      print('Error handling wake word detection: $error');
+      _logger.e('Error handling wake word detection: $error');
+      // Resume video playback on error
+      if (_videoController != null) {
+        await _videoController!.setVolume(1.0);
+        await _videoController!.play();
+      }
       // Restart wake word detection on error
+      _logger.i('🎤 Restarting wake word detection after error');
       await startListeningForWakeWord();
     }
   }
