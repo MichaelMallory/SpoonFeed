@@ -276,8 +276,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         _buildStat('Videos', _videos.length),
-                        _buildStat('Followers', _user?.followers.length ?? 0),
-                        _buildStat('Following', _user?.following.length ?? 0),
+                        _buildStat('Games Played', _gameScore?.gamesPlayed ?? 0),
+                        _buildStat('High Score', _gameScore?.highScore ?? 0),
                       ],
                     ),
                   ],
