@@ -20,6 +20,7 @@ import '../utils/texture_painter.dart';
 import 'package:logger/logger.dart';
 import 'package:spoonfeed/components/expandable_recipe_description.dart';
 import 'recipe_viewer.dart';
+import '../services/video_player_service.dart';
 
 /// Widget that shows voice recognition feedback
 class VoiceFeedbackOverlay extends StatelessWidget {
@@ -47,7 +48,7 @@ class VoiceFeedbackOverlay extends StatelessWidget {
         } else if (provider.isListeningForWakeWord) {
           stateIcon = Icons.mic_none;
           iconColor = Colors.blue;
-          stateText = 'Listening for "Chef"...';
+          stateText = 'Listening for "Hey Chef"...';
         } else {
           return const SizedBox.shrink();
         }
@@ -292,6 +293,10 @@ class _VideoPlayerFullscreenState extends State<VideoPlayerFullscreen> with Auto
     // Use a microtask to avoid state updates during build
     Future.microtask(() {
       if (!mounted) return;
+      
+      // Connect to video player service first
+      final videoPlayerService = Provider.of<VideoPlayerService>(context, listen: false);
+      videoPlayerService.setController(_controller, videoId: widget.video.id);
       
       // Connect to cook mode provider for gesture control
       final cookModeProvider = Provider.of<CookModeProvider>(context, listen: false);

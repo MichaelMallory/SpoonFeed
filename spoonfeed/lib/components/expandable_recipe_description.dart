@@ -36,15 +36,35 @@ class _ExpandableRecipeDescriptionState extends State<ExpandableRecipeDescriptio
             styleSheet: MarkdownStyleSheet(
               p: widget.textStyle,
               h1: widget.textStyle?.copyWith(
-                fontSize: 24,
+                fontSize: 28,
                 fontWeight: FontWeight.bold,
+                height: 1.5,
+                color: Theme.of(context).primaryColor,
               ),
               h2: widget.textStyle?.copyWith(
-                fontSize: 20,
+                fontSize: 22,
                 fontWeight: FontWeight.bold,
+                height: 2.0,
+                color: Theme.of(context).primaryColor,
               ),
-              listBullet: widget.textStyle,
+              listBullet: widget.textStyle?.copyWith(
+                color: Theme.of(context).primaryColor,
+              ),
+              listIndent: 24.0,
+              blockSpacing: 24.0,
+              textAlign: WrapAlignment.start,
+              listBulletPadding: const EdgeInsets.only(right: 12),
+              textScaleFactor: 1.0,
+              horizontalRuleDecoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(
+                    color: Theme.of(context).dividerColor,
+                    width: 1.0,
+                  ),
+                ),
+              ),
             ),
+            selectable: true,
             physics: const NeverScrollableScrollPhysics(),
           ),
         ),

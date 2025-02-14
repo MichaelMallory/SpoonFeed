@@ -60,22 +60,44 @@ class VoiceControlProvider extends ChangeNotifier {
     return _hasPermission;
   }
 
-  /// Set the video controller and ID to control
+  /// Set the current video controller and ID
   void setVideo(VideoPlayerController? controller, String? videoId) {
-    // If we're just updating to a new video, preserve the old ID
-    if (controller != null && _videoController != null) {
-      _currentVideoId = videoId ?? _currentVideoId;
-    } else {
+    _logger.i('🎥 Setting video in VoiceControlProvider - ID: $videoId');
+    
+    // Only update if controller or ID has changed
+    if (_videoController != controller || _currentVideoId != videoId) {
+      _videoController = controller;
       _currentVideoId = videoId;
-    }
-    _videoController = controller;
-    
-    // Update voice service if needed
-    if (_voiceService != null) {
+      
+      // Pass video controller and ID to voice service
       _voiceService.setVideoController(controller);
+      _voiceService.setCurrentVideoId(videoId);
+      
+      // Log controller state
+      if (_videoController != null) {
+        _logger.i('🎥 Video controller state:');
+        _logger.i('   - Is initialized: ${_videoController!.value.isInitialized}');
+        _logger.i('   - Is playing: ${_videoController!.value.isPlaying}');
+        if (_videoController!.value.isInitialized) {
+          _logger.i('   - Position: ${_videoController!.value.position.inSeconds}s');
+          _logger.i('   - Duration: ${_videoController!.value.duration.inSeconds}s');
+        }
+      }
+      
+      // Update state
+      _updateFeedbackMessage();
+      notifyListeners();
     }
-    
-    notifyListeners();
+  }
+
+  /// Set current video ID
+  void setCurrentVideoId(String? videoId) {
+    if (_currentVideoId != videoId) {
+      _logger.i('🎥 Updating video ID in VoiceControlProvider: $videoId');
+      _currentVideoId = videoId;
+      _voiceService.setCurrentVideoId(videoId);
+      notifyListeners();
+    }
   }
 
   /// Enable or disable voice control
@@ -92,7 +114,7 @@ class VoiceControlProvider extends ChangeNotifier {
     _isEnabled = enabled;
     if (enabled) {
       await _voiceService.startListeningForWakeWord();
-      _feedbackMessage = 'Listening for "Chef"...';
+      _feedbackMessage = 'Listening for "Hey Chef"...';
     } else {
       // Don't clear video controller when disabling voice mode
       await _voiceService.stopRecording();
@@ -110,10 +132,11 @@ class VoiceControlProvider extends ChangeNotifier {
     } else if (_voiceService.isListeningForCommand) {
       _feedbackMessage = 'Listening for command...';
     } else if (_voiceService.isListeningForWakeWord) {
-      _feedbackMessage = 'Listening for "Chef"...';
+      _feedbackMessage = 'Listening for "Hey Chef"...';
     } else if (_voiceService.isProcessing) {
       _feedbackMessage = 'Processing...';
     }
+    notifyListeners();
   }
 
   /// Process a voice command and control video playback

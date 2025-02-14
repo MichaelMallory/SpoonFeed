@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';  // Add this import for max function
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:video_player/video_player.dart';
 import 'package:spoonfeed/services/video_player_service.dart';
 import 'package:flutter/widgets.dart';
+import '../models/video_transcript.dart';
+import './transcript_service.dart';
+import '../models/command_intent.dart';
+import './command_parser_service.dart';
 
 /// Service for handling voice commands, including recording and processing
 class VoiceCommandService extends ChangeNotifier {
@@ -25,6 +30,7 @@ class VoiceCommandService extends ChangeNotifier {
   PorcupineManager? _porcupineManager;
   Timer? _silenceTimer;
   DateTime? _lastAudioActivity;
+  String? _currentVideoId;
   
   // Configuration
   static const silenceThreshold = -50.0; // dB
@@ -59,6 +65,8 @@ class VoiceCommandService extends ChangeNotifier {
   final String _accessKey = dotenv.env['PICOVOICE_API_KEY'] ?? '';
 
   final VideoPlayerService _videoPlayerService;
+  final TranscriptService _transcriptService = TranscriptService();
+  final CommandParserService _commandParserService = CommandParserService();
 
   // Getters
   bool get isRecording => _isRecording;
@@ -73,6 +81,34 @@ class VoiceCommandService extends ChangeNotifier {
   VoiceCommandService(this._videoPlayerService);
 
   bool _isRecording = false;
+
+  /// Set the current video controller
+  void setVideoController(VideoPlayerController? controller) {
+    // Only update if the controller has actually changed and we're not disposed
+    if (!_isDisposed && _videoController != controller) {
+      _logger.i('🎥 Setting video controller in VoiceCommandService');
+      _videoController = controller;
+      
+      if (_videoController != null) {
+        _logger.i('🎥 Video controller connected');
+        _logger.i('   - Is initialized: ${_videoController!.value.isInitialized}');
+        _logger.i('   - Is playing: ${_videoController!.value.isPlaying}');
+        _logger.i('   - Position: ${_videoController!.value.position.inSeconds}s');
+        if (_videoController!.value.isInitialized) {
+          _logger.i('   - Duration: ${_videoController!.value.duration.inSeconds}s');
+        }
+      } else {
+        _logger.i('🎥 Video controller disconnected');
+      }
+      
+      // Schedule the notification for the next frame to avoid build-phase updates
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_isDisposed) {
+          notifyListeners();
+        }
+      });
+    }
+  }
 
   /// Initialize wake word detection
   Future<void> initializeWakeWord() async {
@@ -261,49 +297,123 @@ class VoiceCommandService extends ChangeNotifier {
   Future<void> _processVoiceCommand(String command) async {
     _logger.i('🎯 Processing command: "$command"');
     
-    if (_videoController == null) {
-      _logger.w('⚠️ No video controller available');
-      return;
+    if (_videoController == null || !_videoController!.value.isInitialized) {
+      _logger.w('⚠️ No valid video controller available');
+      throw Exception('Video controller not available');
     }
 
-    _logger.i('📹 Video Controller State:');
-    _logger.i('   - Is Playing: ${_videoController?.value.isPlaying}');
-    _logger.i('   - Position: ${_videoController?.value.position}');
-    _logger.i('   - Duration: ${_videoController?.value.duration}');
-    _logger.i('   - Volume: ${_videoController?.value.volume}');
-
     bool commandExecuted = false;
+    final startPosition = _videoController!.value.position;
+    final videoId = _videoPlayerService.currentVideoId;
+    
+    _logger.i('🎥 Current video state - ID: $videoId, Position: ${startPosition.inSeconds}s');
     
     try {
-      final normalizedCommand = command.toLowerCase();
-      
-      if (normalizedCommand.contains('play')) {
-        _logger.i('▶️ Attempting to play video');
-        await _videoController!.play();
-        await _videoController!.setVolume(1.0);
-        _logger.i('✅ Play command executed');
-        commandExecuted = true;
-      } else if (normalizedCommand.contains('pause')) {
-        _logger.i('⏸️ Attempting to pause video');
-        await _videoController!.pause();
-        _logger.i('✅ Pause command executed');
-        commandExecuted = true;
-      } else if (normalizedCommand.contains('back') || normalizedCommand.contains('rewind')) {
-        final seconds = _extractSeconds(normalizedCommand);
-        final currentPosition = _videoController!.value.position;
-        final newPosition = currentPosition - Duration(seconds: seconds);
-        _logger.i('⏪ Attempting to seek from ${currentPosition.inSeconds}s to ${newPosition.inSeconds}s');
-        await _videoController!.seekTo(newPosition);
-        _logger.i('✅ Seek command executed');
-        commandExecuted = true;
-      } else if (normalizedCommand.contains('forward') || normalizedCommand.contains('ahead')) {
-        final seconds = _extractSeconds(normalizedCommand);
-        final currentPosition = _videoController!.value.position;
-        final newPosition = currentPosition + Duration(seconds: seconds);
-        _logger.i('⏩ Attempting to seek from ${currentPosition.inSeconds}s to ${newPosition.inSeconds}s');
-        await _videoController!.seekTo(newPosition);
-        _logger.i('✅ Seek command executed');
-        commandExecuted = true;
+      final commandIntent = _commandParserService.parseCommand(command);
+      _logger.i('🎯 Parsed command intent: $commandIntent');
+
+      switch (commandIntent.type) {
+        case CommandType.play:
+          _logger.i('▶️ Attempting to play video');
+          await _videoController!.setVolume(1.0);
+          await Future.delayed(const Duration(milliseconds: 100));
+          await _videoController!.play();
+          commandExecuted = true;
+          break;
+
+        case CommandType.pause:
+          _logger.i('⏸️ Attempting to pause video');
+          await _videoController!.pause();
+          commandExecuted = true;
+          break;
+
+        case CommandType.seek:
+        case CommandType.rewind:
+        case CommandType.fastForward:
+          final seconds = commandIntent.seekSeconds ?? _extractSeconds(command);
+          final currentPosition = _videoController!.value.position;
+          final newPosition = (commandIntent.seekDirection == SeekDirection.forward || 
+                           commandIntent.type == CommandType.fastForward)
+              ? currentPosition + Duration(seconds: seconds)
+              : currentPosition - Duration(seconds: seconds);
+          
+          _logger.i('⏩ Attempting to seek from ${currentPosition.inSeconds}s to ${newPosition.inSeconds}s');
+          
+          try {
+            await _videoController!.seekTo(newPosition);
+            await Future.delayed(const Duration(milliseconds: 100));
+            await _videoController!.play();
+            await _videoController!.setVolume(1.0);
+            
+            // Verify the seek operation
+            final actualPosition = _videoController!.value.position;
+            _logger.i('✅ Seek complete. Current position: ${actualPosition.inSeconds}s');
+            
+            commandExecuted = true;
+          } catch (e) {
+            _logger.e('❌ Error during seek operation: $e');
+            throw e;
+          }
+          break;
+
+        case CommandType.contentSeek:
+          if (commandIntent.contentDescription != null) {
+            final videoId = _videoPlayerService.currentVideoId;
+            _logger.i('🔍 Content seek - Video ID: $videoId, searching for: "${commandIntent.contentDescription}"');
+            
+            if (videoId != null) {
+              try {
+                _logger.i('📑 Fetching transcript for video: $videoId');
+                final transcript = await _transcriptService.getTranscript(videoId);
+                
+                if (transcript != null) {
+                  _logger.i('✅ Transcript found, searching for: "${commandIntent.contentDescription}"');
+                  final matchingSegments = transcript.searchText(commandIntent.contentDescription!);
+                  _logger.i('🔍 Found ${matchingSegments.length} matching segments');
+                  
+                  if (matchingSegments.isNotEmpty) {
+                    // Sort segments by start time and pick the first occurrence
+                    matchingSegments.sort((a, b) => a.start.compareTo(b.start));
+                    final targetSegment = matchingSegments.first;
+                    
+                    // Seek to slightly before the segment starts
+                    final seekPosition = Duration(milliseconds: max(0, targetSegment.start - 500));
+                    _logger.i('🎯 Found matching segment at ${seekPosition.inSeconds}s: "${targetSegment.text}"');
+                    
+                    try {
+                      await _videoController!.seekTo(seekPosition);
+                      await Future.delayed(const Duration(milliseconds: 100));
+                      await _videoController!.play();
+                      await _videoController!.setVolume(1.0);
+                      _logger.i('✅ Successfully seeked to position and resumed playback');
+                      commandExecuted = true;
+                    } catch (e) {
+                      _logger.e('❌ Error during seek operation: $e');
+                      throw e;
+                    }
+                  } else {
+                    _logger.w('⚠️ No matching content found in transcript for: "${commandIntent.contentDescription}"');
+                  }
+                } else {
+                  _logger.w('⚠️ No transcript found for video: $videoId');
+                }
+              } catch (e) {
+                _logger.e('❌ Error during content seek: $e');
+                throw e;
+              }
+            } else {
+              _logger.w('⚠️ No current video ID available');
+              // Try to restore video state
+              await _videoController!.seekTo(startPosition);
+              await _videoController!.setVolume(1.0);
+              await _videoController!.play();
+            }
+          }
+          break;
+
+        case CommandType.unknown:
+          _logger.w('⚠️ Unknown command type');
+          break;
       }
 
       // Log final state after command execution
@@ -311,18 +421,21 @@ class VoiceCommandService extends ChangeNotifier {
       _logger.i('   - Is Playing: ${_videoController?.value.isPlaying}');
       _logger.i('   - Position: ${_videoController?.value.position}');
       _logger.i('   - Volume: ${_videoController?.value.volume}');
+      _logger.i('   - Video ID: $videoId');
 
-      // If no valid command was executed, resume playback
       if (!commandExecuted) {
-        _logger.i('⚠️ No valid command detected, resuming playback');
+        _logger.w('⚠️ No valid command executed, restoring previous state');
+        await _videoController!.seekTo(startPosition);
         await _videoController!.setVolume(1.0);
         await _videoController!.play();
       }
     } catch (e) {
       _logger.e('❌ Error processing command: $e');
-      // Resume video playback on error
+      // Restore original state on error
+      await _videoController!.seekTo(startPosition);
       await _videoController!.setVolume(1.0);
       await _videoController!.play();
+      throw e;
     }
   }
 
@@ -602,17 +715,12 @@ class VoiceCommandService extends ChangeNotifier {
     }
   }
 
-  // Add setter for video controller
-  void setVideoController(VideoPlayerController? controller) {
-    // Only update if the controller has actually changed and we're not disposed
-    if (!_isDisposed && _videoController != controller) {
-      _videoController = controller;
-      // Schedule the notification for the next frame to avoid build-phase updates
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!_isDisposed) {
-          notifyListeners();
-        }
-      });
+  /// Set the current video ID
+  void setCurrentVideoId(String? videoId) {
+    _logger.i('🎥 Setting current video ID in VoiceCommandService: $videoId');
+    if (_currentVideoId != videoId) {
+      _currentVideoId = videoId;
+      notifyListeners();
     }
   }
 
@@ -621,36 +729,49 @@ class VoiceCommandService extends ChangeNotifier {
     _logger.i('🔄 Restarting wake word detection');
     
     try {
-      // Stop existing instances
+      // Ensure proper cleanup
       await _porcupineManager?.stop();
-      await _recorder?.stop();
+      _porcupineManager = null;
+      await _speech.stop();
       
-      // Reset state
+      // Reset all state flags
       _isListeningForWakeWord = false;
       _isListeningForCommand = false;
       _isProcessing = false;
       _currentSpeech = null;
       _lastError = null;
       
-      // Wait a moment before restarting
+      // Cancel any pending timers
+      _commandTimeout?.cancel();
+      _silenceTimer?.cancel();
+      
+      // Wait for state to settle
       await Future.delayed(const Duration(milliseconds: 500));
       
-      // Start fresh
-      await startListeningForWakeWord();
+      if (_isDisposed) return;
+
+      // Initialize fresh instance of wake word detection
+      _porcupineManager = await PorcupineManager.fromKeywordPaths(
+        _accessKey,
+        ['assets/keywords/chef_android.ppn'],
+        _handleWakeWordDetected,
+      );
+
+      await _porcupineManager?.start();
+      _isListeningForWakeWord = true;
+      notifyListeners();
       
       _logger.i('✅ Successfully restarted wake word detection');
     } catch (e) {
       _logger.e('❌ Error restarting wake word detection: $e');
       _lastError = 'Failed to restart wake word detection';
       
-      // Try again after a longer delay
-      await Future.delayed(const Duration(seconds: 2));
+      // Try again after a longer delay if not disposed
       if (!_isDisposed) {
-        startListeningForWakeWord();
+        await Future.delayed(const Duration(seconds: 2));
+        await startListeningForWakeWord();
       }
     }
-    
-    notifyListeners();
   }
 
   /// Start listening for wake word
@@ -697,80 +818,136 @@ class VoiceCommandService extends ChangeNotifier {
     try {
       _logger.i('🎯 Wake word "hey chef" detected');
       
-      // Log initial video state
-      _logger.i('📹 Initial Video Controller State:');
-      _logger.i('   - Controller exists: ${_videoController != null}');
-      if (_videoController != null) {
-        _logger.i('   - Is Playing: ${_videoController!.value.isPlaying}');
-        _logger.i('   - Position: ${_videoController!.value.position}');
-        _logger.i('   - Volume: ${_videoController!.value.volume}');
-      }
-
-      // Pause video immediately when wake word is detected
-      if (_videoController?.value.isPlaying ?? false) {
-        _logger.i('⏸️ Attempting to pause video and mute audio');
-        await _videoController?.pause();
-        await _videoController?.setVolume(0.0);
-        _logger.i('✅ Video paused and muted');
-      }
-
-      // Stop wake word detection temporarily
+      // Stop wake word detection immediately
       await _porcupineManager?.stop();
-      _logger.i('🎤 Wake word detection temporarily stopped');
-
-      // Set up a timer to resume video after 5 seconds if no command is given
-      Timer(const Duration(seconds: 5), () async {
-        if (_videoController != null && 
-            !_videoController!.value.isPlaying && 
-            !_isProcessing) {
-          _logger.i('⚠️ No command received within timeout, resuming playback');
-          _logger.i('📹 Pre-resume Video State:');
-          _logger.i('   - Is Playing: ${_videoController!.value.isPlaying}');
-          _logger.i('   - Position: ${_videoController!.value.position}');
-          
-          await _videoController!.setVolume(1.0);
-          await _videoController!.play();
-          
-          _logger.i('📹 Post-resume Video State:');
-          _logger.i('   - Is Playing: ${_videoController!.value.isPlaying}');
-          _logger.i('   - Position: ${_videoController!.value.position}');
-        }
-        
-        // Ensure wake word detection is restarted after the timer
-        _logger.i('🎤 Restarting wake word detection after timeout');
-        await startListeningForWakeWord();
-      });
+      _isListeningForWakeWord = false;
       
-      // Initialize speech recognition if not already initialized
-      bool isInitialized = await _speech.initialize();
+      // Ensure we have a valid video controller
+      if (_videoController == null || !_videoController!.value.isInitialized) {
+        _logger.w('⚠️ No valid video controller available');
+        throw Exception('Video controller not available');
+      }
+      
+      // Store current video state
+      final wasPlaying = _videoController!.value.isPlaying;
+      final currentPosition = _videoController!.value.position;
+      
+      _logger.i('📹 Current video state - Playing: $wasPlaying, Position: ${currentPosition.inSeconds}s');
+      
+      // Pause video immediately when wake word is detected
+      if (wasPlaying) {
+        _logger.i('⏸️ Attempting to pause video and mute audio');
+        try {
+          await _videoController!.pause();
+          await Future.delayed(const Duration(milliseconds: 100));
+          await _videoController!.setVolume(0.0);
+          
+          // Verify the pause state
+          if (_videoController!.value.isPlaying) {
+            _logger.w('⚠️ Video failed to pause, retrying...');
+            await _videoController!.pause();
+          }
+          
+          _logger.i('✅ Video paused successfully');
+        } catch (e) {
+          _logger.e('❌ Error pausing video: $e');
+          throw e;
+        }
+      }
+
+      // Start listening for command
+      _isListeningForCommand = true;
+      notifyListeners();
+
+      // Initialize speech recognition
+      bool isInitialized = await _initializeSpeech();
       if (!isInitialized) {
         throw Exception('Failed to initialize speech recognition');
       }
+
+      // Set up command timeout
+      _commandTimeout?.cancel();
+      _commandTimeout = Timer(const Duration(seconds: 5), () async {
+        if (_videoController != null && wasPlaying) {
+          _logger.i('⚠️ No command received within timeout, resuming playback');
+          try {
+            await _videoController!.setVolume(1.0);
+            await _videoController!.seekTo(currentPosition);
+            await _videoController!.play();
+            _logger.i('✅ Playback resumed at ${currentPosition.inSeconds}s');
+          } catch (e) {
+            _logger.e('❌ Error resuming playback: $e');
+          }
+        }
+        
+        // Reset state and restart wake word detection
+        _isListeningForCommand = false;
+        notifyListeners();
+        await _restartWakeWordDetection();
+      });
       
       // Start listening for speech
       await _speech.listen(
-        onResult: (result) {
+        onResult: (result) async {
           if (result.finalResult) {
+            _isListeningForCommand = false;
+            notifyListeners();
+            
             // Process the voice command
             final command = result.recognizedWords.toLowerCase();
-            _processVoiceCommand(command);
+            if (command.isNotEmpty) {
+              _logger.i('🎯 Processing command: "$command"');
+              try {
+                await _processVoiceCommand(command);
+                _logger.i('✅ Command processed successfully');
+              } catch (e) {
+                _logger.e('❌ Error processing command: $e');
+                // Restore original state on error
+                if (wasPlaying && _videoController != null) {
+                  await _videoController!.setVolume(1.0);
+                  await _videoController!.seekTo(currentPosition);
+                  await _videoController!.play();
+                }
+              }
+            } else {
+              _logger.w('⚠️ Empty command received');
+              // Restore original state
+              if (wasPlaying && _videoController != null) {
+                await _videoController!.setVolume(1.0);
+                await _videoController!.seekTo(currentPosition);
+                await _videoController!.play();
+              }
+            }
             
-            // Restart wake word detection after command processing
-            _logger.i('🎤 Restarting wake word detection after command');
-            startListeningForWakeWord();
+            // Clean up and restart wake word detection
+            _commandTimeout?.cancel();
+            await _speech.stop();
+            await _restartWakeWordDetection();
           }
         },
+        listenMode: stt.ListenMode.dictation,
+        cancelOnError: true,
+        partialResults: true,
       );
     } catch (error) {
       _logger.e('Error handling wake word detection: $error');
-      // Resume video playback on error
+      // Attempt to restore video state
       if (_videoController != null) {
-        await _videoController!.setVolume(1.0);
-        await _videoController!.play();
+        try {
+          await _videoController!.setVolume(1.0);
+          await _videoController!.play();
+          _logger.i('✅ Video state restored after error');
+        } catch (e) {
+          _logger.e('❌ Error restoring video state: $e');
+        }
       }
-      // Restart wake word detection on error
-      _logger.i('🎤 Restarting wake word detection after error');
-      await startListeningForWakeWord();
+      
+      // Reset state
+      _isListeningForCommand = false;
+      notifyListeners();
+      
+      // Restart wake word detection
+      await _restartWakeWordDetection();
     }
   }
 } 

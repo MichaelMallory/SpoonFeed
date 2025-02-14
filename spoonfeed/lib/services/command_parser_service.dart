@@ -40,13 +40,26 @@ class CommandParserService {
 
     // Check for content-based navigation
     if (_containsAny(normalizedText, ['show', 'find', 'go to', 'jump to'])) {
+      _logger.i('📝 Detected content seek command');
       final content = _extractContentDescription(normalizedText);
       if (content != null) {
+        _logger.i('📝 Extracted content: "$content"');
         return CommandIntent(
           type: CommandType.contentSeek,
           contentDescription: content,
+          confidence: 1.0,
         );
       }
+    }
+
+    // Single word fallback - treat as content search if no other command matches
+    if (!normalizedText.contains(' ') && normalizedText.length > 2) {
+      _logger.i('📝 Single word command detected, treating as content search: "$normalizedText"');
+      return CommandIntent(
+        type: CommandType.contentSeek,
+        contentDescription: normalizedText,
+        confidence: 0.8,
+      );
     }
 
     _logger.w('⚠️ Unknown command type: "$normalizedText"');
@@ -80,28 +93,37 @@ class CommandParserService {
   String? _extractContentDescription(String text) {
     // Common patterns for content references
     final patterns = [
-      RegExp(r'(?:show|find|go to|jump to)\s+(?:the\s+)?(?:part\s+)?(?:with|where)\s+(.+)'),
-      RegExp(r'(?:show|find|go to|jump to)\s+(?:the\s+)?(.+?)\s+(?:part|section|step)'),
+      // Match "find X" pattern directly
+      RegExp(r'(?:find|search for|look for)\s+(.+)'),
+      // Match "show me the part with X" pattern
+      RegExp(r'(?:show|find|go to|jump to)\s+(?:me\s+)?(?:the\s+)?(?:part\s+)?(?:with|where)\s+(.+)'),
+      // Match "show X" pattern
+      RegExp(r'(?:show|find|go to|jump to)\s+(?:me\s+)?(?:the\s+)?(.+?)\s*(?:part|section|step|ingredient|bit)?$'),
+      // Match "when do you X" pattern
+      RegExp(r'when\s+(?:do\s+)?(?:you\s+)?(.+)'),
     ];
 
     for (final pattern in patterns) {
       final match = pattern.firstMatch(text);
       if (match != null) {
-        final content = match.group(1)!.trim();
-        _logger.d('📝 Extracted content description: "$content"');
+        final content = match.group(1)!.trim()
+            .replaceAll(RegExp(r'^(?:the|do|you|we)\s+'), '') // Remove common prefixes
+            .replaceAll(RegExp(r'\s+(?:part|section|step|ingredient|bit)$'), '') // Remove common suffixes
+            .trim();
+        _logger.d('📝 Extracted content description: "$content" from pattern: ${pattern.pattern}');
         return content;
       }
     }
 
     // If no pattern matches but we have keywords, take everything after them
-    final keywords = ['show', 'find', 'go to', 'jump to'];
+    final keywords = ['show', 'find', 'go to', 'jump to', 'when'];
     for (final keyword in keywords) {
       if (text.contains(keyword)) {
         final parts = text.split(keyword);
         if (parts.length > 1) {
           final content = parts[1].trim()
-              .replaceAll(RegExp(r'^(?:the|to)\s+'), '')
-              .replaceAll(RegExp(r'\s+(?:part|section|step)$'), '')
+              .replaceAll(RegExp(r'^(?:me|the|do|you|we)\s+'), '')
+              .replaceAll(RegExp(r'\s+(?:part|section|step|ingredient|bit)$'), '')
               .trim();
           _logger.d('📝 Extracted content description (fallback): "$content"');
           return content;
